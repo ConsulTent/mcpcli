@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/charmbracelet/bubbles v0.18.0
-	github.com/charmbracelet/bubbletea v0.26.3
+	github.com/charmbracelet/bubbletea v0.27.1
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/modelcontextprotocol/go-sdk v1.8.0
