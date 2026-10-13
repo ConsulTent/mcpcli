@@ -1,0 +1,17 @@
+name: Renovate
+on:
+  schedule:
+    - cron: "0 3 * * *" # daily; Renovate also obeys its own schedule config
+  workflow_dispatch:
+
+permissions: {} # Renovate authenticates with GH_PAT, not GITHUB_TOKEN
+
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: renovatebot/github-action@v46.3.8
+        with:
+          token: ${{ secrets.GH_PAT }} # classic PAT: public_repo + workflow
+        env:
+          RENOVATE_REPOSITORIES: ${{ github.repository }}

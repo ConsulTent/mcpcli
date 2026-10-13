@@ -1,0 +1,30 @@
+# Builds mcpcli for each platform with the SLSA3 Go builder and attaches each
+# binary plus its .intoto.jsonl provenance to the GitHub release.
+# Per-platform build configs live in .slsa-goreleaser/.
+# The builder halts on private repositories unless `private-repository: true`
+# is set (which publishes the repo name to the public Rekor log); this repo
+# releases only once it is public.
+
+name: SLSA Go releaser
+on:
+  workflow_dispatch: # dry run on a branch: builds + provenance, no upload
+  release:
+    types: [published]
+
+permissions: read-all
+
+jobs:
+  build:
+    permissions:
+      id-token: write # To sign.
+      contents: write # To upload release assets.
+      actions: read   # To read workflow path.
+    strategy:
+      matrix:
+        os: [linux, darwin, windows]
+        arch: [amd64, arm64]
+    # SLSA requires the builder to be referenced by a full @vX.Y.Z tag.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/builder_go_slsa3.yml@v2.1.0
+    with:
+      go-version-file: go.mod
+      config-file: .slsa-goreleaser/${{ matrix.os }}-${{ matrix.arch }}.yml

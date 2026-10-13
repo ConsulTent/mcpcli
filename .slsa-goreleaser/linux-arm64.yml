@@ -1,0 +1,9 @@
+version: 1
+env:
+  - CGO_ENABLED=0
+flags:
+  - -trimpath
+goos: linux
+goarch: arm64
+main: ./cmd/mcp
+binary: mcp-linux-arm64

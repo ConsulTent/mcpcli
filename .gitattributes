@@ -1,0 +1,7 @@
+# The repository's line-ending law: every text blob is LF and every text
+# checkout is LF, whatever the host's core.autocrlf says. A CRLF-on-disk
+# checkout of this repo once silently broke its source-scan and golden
+# tests (TestProviderTableMatchesFillProviders was the canary); attributes
+# beat config, so this file makes that trap impossible on any clone.
+
+* text=auto eol=lf
