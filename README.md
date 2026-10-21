@@ -14,6 +14,12 @@ Requires Go 1.27.1 or newer.
 go install github.com/ConsulTent/mcpcli/cmd/mcp@latest
 ```
 
+With Homebrew (macOS or Linux):
+
+```
+brew install ConsulTent/tap/mcpcli
+```
+
 Or build from a checkout:
 
 ```
@@ -316,4 +322,4 @@ credentials, …).
 ## License
 
 Copyright ConsulTent Pte. Ltd., all Rights Reserved. — https://consultent.ltd.
-All code is licensed under the [GNU AGPL-3.0](LICENSE).
+All code is licensed under the [GNU AGPL-3.0-or-later](LICENSE).
