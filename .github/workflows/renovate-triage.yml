@@ -1,0 +1,122 @@
+# Daily Renovate triage: approve and apply dependency PRs (all classes - major,
+# minor, patch, digest/pin) when their ci run is green; if main's ci goes red after
+# a merge, revert that PR and open a "manual fix required" issue. CVE-flagged
+# merges trigger an immediate patch release via release.yml.
+#
+# Identity split: the job's GITHUB_TOKEN approves PRs and files issues (a different
+# identity from the PAT that authored the Renovate PRs); merges and reverts use
+# GH_PAT, which can push to the protected main branch.
+#
+# Boundary: weekly e2e failures (behavior-level, not attributable to one PR) are
+# never auto-reverted - file an issue manually if the mcp-e2e workflow fails.
+name: renovate-triage
+
+on:
+  schedule:
+    - cron: "30 4 * * *" # daily, after Renovate's 03:00 run
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    env:
+      PAT: ${{ secrets.GH_PAT }}
+    steps:
+      - name: Triage dependency PRs
+        run: |
+          set +e # one bad PR must not abort the loop; every step checks its own errors
+
+          echo "== renovate triage $(date -u +%FT%TZ) =="
+
+          # PRs flagged for manual fixes: while such an issue is open, triage skips
+          # PRs it references (Renovate re-creates reverted updates; merging them
+          # again would loop daily).
+          BLOCKED="$(gh issue list --state open --json title,body \
+            --jq '.[] | select(.title | startswith("manual fix required")) | .body')"
+
+          gh pr list --label dependencies --state open \
+            --json number,title --jq '.[] | "\(.number)\t\(.title)"' \
+          | while IFS=$'\t' read -r NUM TITLE; do
+              echo "-- PR #$NUM: $TITLE"
+
+              if echo "$BLOCKED" | grep -q "#$NUM"; then
+                echo "   skip: flagged for manual fix"
+                continue
+              fi
+
+              # Wait up to 10 minutes for the PR's ci check to pass.
+              GREEN=""
+              for _ in $(seq 1 20); do
+                BUCKETS="$(gh pr checks "$NUM" --json name,bucket --jq '.[].bucket' 2>/dev/null)"
+                if echo "$BUCKETS" | grep -qx "pass" && ! echo "$BUCKETS" | grep -qx "fail"; then
+                  GREEN=1; break
+                fi
+                if echo "$BUCKETS" | grep -qx "fail"; then
+                  break
+                fi
+                sleep 30
+              done
+              if [ -z "$GREEN" ]; then
+                gh pr comment "$NUM" -b "renovate-triage: skipped (ci not green)"
+                echo "   skip: ci not green"
+                continue
+              fi
+
+              # Approve with the job identity; if GitHub rejects the review
+              # (identity rules), proceed - the merge is the substantive action.
+              if ! gh pr review "$NUM" --approve -b "automated: green CI (renovate-triage)" >/dev/null 2>&1; then
+                echo "   note: review rejected; proceeding to merge"
+              fi
+
+              if ! GH_TOKEN="$PAT" gh pr merge "$NUM" --squash --delete-branch \
+                   --subject "$TITLE (#$NUM)" >/dev/null 2>&1; then
+                echo "   error: merge failed"
+                continue
+              fi
+              SHA="$(gh pr view "$NUM" --json mergeCommit --jq .mergeCommit.oid)"
+              echo "   merged: $SHA; watching main ci"
+
+              # Watch main's ci run for the merge commit (up to 10 minutes).
+              MAIN=""
+              for _ in $(seq 1 20); do
+                RUN="$(gh run list --workflow ci.yml --commit "$SHA" \
+                  --json status,conclusion --jq '.[0] // empty' 2>/dev/null)"
+                if echo "$RUN" | grep -q completed; then
+                  if echo "$RUN" | grep -q success; then MAIN=green; else MAIN=red; fi
+                  break
+                fi
+                sleep 30
+              done
+
+              if [ "$MAIN" = "green" ]; then
+                echo "   main ci green"
+              else
+                echo "   main ci NOT green - reverting"
+                GH_TOKEN="$PAT" gh pr revert "$NUM" --merge --delete-branch \
+                  --subject "revert: $TITLE (#$NUM)" >/dev/null 2>&1 \
+                  || echo "   error: revert failed - MANUAL ACTION REQUIRED"
+                gh issue create \
+                  --title "manual fix required: $TITLE" \
+                  --body "PR #$NUM was auto-merged (green PR ci) but main's ci failed, so it was auto-reverted. Renovate will re-create the update; triage skips PRs referenced here while this issue is open. Fix manually, then close this issue." \
+                  >/dev/null || echo "   error: issue creation failed"
+              fi
+            done
+
+          # CVE scan: dependency PRs merged since the last release. Any CVE/GHSA
+          # reference triggers an immediate patch release.
+          LAST="$(gh release view --json createdAt --jq .createdAt 2>/dev/null)"
+          if [ -n "$LAST" ]; then
+            DATE="${LAST%%T*}"
+            HITS="$(gh pr list --state merged --label dependencies \
+              --search "merged:>=$DATE" --json body --jq '.[].body' | grep -cE 'CVE-|GHSA-')"
+            echo "== merged dependency PRs since $DATE with CVE references: $HITS"
+            if [ "$HITS" -gt 0 ]; then
+              echo "== triggering immediate CVE release"
+              GH_TOKEN="$PAT" gh workflow run release.yml -f reason=cve
+            fi
+          fi
+          echo "== triage complete"

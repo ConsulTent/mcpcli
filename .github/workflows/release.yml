@@ -1,0 +1,120 @@
+# Patch-release automation for dependency rollups.
+#   monthly    (default, monthly cron): release when the trailing 31 days had
+#              >= 10 merged dependency PRs, or any CVE/GHSA reference.
+#   cve        (dispatched by renovate-triage): release immediately.
+#   sync-only  (dispatch): no release; only re-pin the reusable-workflow kit
+#              versions - use after manual releases that bypass this workflow.
+#
+# Every release also updates the kit pins: the README caller example's
+# @<commit-hash> # vX.Y.Z and the mcp-e2e.yml header tag, so callers copying
+# the kit always pin the current release.
+name: release
+
+on:
+  schedule:
+    - cron: "0 4 1 * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "monthly | cve | sync-only"
+        required: false
+        default: "monthly"
+
+permissions: {} # all writes go through GH_PAT
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REASON: ${{ github.event.inputs.reason || 'monthly' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Decide
+        id: decide
+        run: |
+          if [ "$REASON" = "sync-only" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          SINCE="$(date -u -d '31 days ago' +%F)"
+          if gh release view >/dev/null 2>&1; then
+            SINCE="$(gh release view --json createdAt --jq .createdAt | cut -dT -f1)"
+          fi
+          TITLES="$(gh pr list --state merged --label dependencies \
+            --search "merged:>=$SINCE" --json title --jq '.[].title')"
+          COUNT="$(echo "$TITLES" | grep -c . || true)"
+          CVES="$(gh pr list --state merged --label dependencies \
+            --search "merged:>=$SINCE" --json body --jq '.[].body' | grep -cE 'CVE-|GHSA-' || true)"
+          {
+            echo "count=$COUNT"
+            echo "since=$SINCE"
+            echo "titles<<EOF"
+            echo "$TITLES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "== $COUNT dependency merges since $SINCE, $CVES CVE-flagged, reason=$REASON"
+          if [ "$REASON" = "cve" ] || [ "$CVES" -gt 0 ] || [ "$COUNT" -ge 10 ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "== no release needed"
+          fi
+
+      - name: Release
+        if: steps.decide.outputs.release == 'true'
+        run: |
+          git config user.name "release bot"
+          git config user.email "actions@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          V="$(grep -oE 'Version = "v[0-9.]+"' internal/version/version.go | grep -oE 'v[0-9.]+')"
+          NEW="v${V%.*}.$((${V##*.} + 1))"
+          N="${{ steps.decide.outputs.count }}"
+          echo "== releasing $V -> $NEW ($N dependency updates)"
+
+          sed -i "s/Version = \"$V\"/Version = \"$NEW\"/" internal/version/version.go
+          git add internal/version/version.go
+          git commit -m "chore: release $NEW ($N dependency updates)"
+          git push origin main
+          git tag -a "$NEW" -m "mcp $NEW"
+          git push origin "$NEW"
+
+          NOTES="$(printf 'Dependency rollup: %s update(s) merged since %s (release workflow).\n\n%s\n' \
+            "$N" "${{ steps.decide.outputs.since }}" "${{ steps.decide.outputs.titles }}")"
+          if [ "$REASON" = "cve" ]; then
+            NOTES="$NOTES
+
+          Contains security-relevant dependency updates (CVE/GHSA referenced)."
+          fi
+          gh release create "$NEW" --title "mcp $NEW" --notes "$NOTES"
+
+      - name: Sync kit version pins
+        if: steps.decide.outputs.release == 'true' || github.event.inputs.reason == 'sync-only'
+        run: |
+          git config user.name "release bot"
+          git config user.email "actions@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git pull --rebase origin main
+
+          if [ "$REASON" = "sync-only" ]; then
+            TAG="$(gh release view --json tagName --jq .tagName)"
+            SHA="$(git rev-list -n1 "$TAG")"
+          else
+            TAG="$(grep -oE 'Version = "v[0-9.]+"' internal/version/version.go | grep -oE 'v[0-9.]+')"
+            SHA="$(git rev-parse HEAD)"
+          fi
+          echo "== pinning kit to $SHA # $TAG"
+
+          sed -i -E "s|@[0-9a-f]{40} # v[0-9.]+|@$SHA # $TAG|" README.md
+          sed -i -E "s/# v(X\.Y\.Z|[0-9]+\.[0-9]+\.[0-9]+)/# $TAG/" .github/workflows/mcp-e2e.yml
+
+          if git diff --quiet; then
+            echo "== kit pins already current"
+            exit 0
+          fi
+          git add README.md .github/workflows/mcp-e2e.yml
+          git commit -m "docs: pin workflow example to $TAG"
+          git push origin main

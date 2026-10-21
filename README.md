@@ -286,6 +286,13 @@ The `tested` badge is state-neutral. Next to it, your workflow's own status badg
 is available for repositories that prefer fixed art. The spec badge shows the protocol
 versions `mcp` speaks.
 
+## Dependency maintenance
+
+Renovate PRs are triaged daily: any update class is approved and merged when its CI is
+green; if main breaks, the merge is auto-reverted and flagged in an issue for manual
+fixes. Dependency rollups ship as patch releases — monthly when a month had ten or more
+updates, or immediately when a CVE/GHSA-flagged update lands.
+
 ## Output modes
 
 - Default: emoji icons, ANSI colors, and an animated spinner (stderr).
