@@ -84,6 +84,15 @@ Resolve a library to its Context7 ID:
 
 ![mcp info and tools call resolve-library-id against Context7](docs/screenshots/example-context7.png)
 
+### Image content — `@modelcontextprotocol/server-everything` (stdio)
+
+Image-generation servers return image content blocks in tool results. `mcp` renders
+them as one compact summary line instead of dumping base64 into the terminal, and
+`--outfile` saves the decoded bytes directly to a file — extension derived from the
+block's MIME type (`mcp-logo` + `image/png` → `mcp-logo.png`):
+
+![mcp tools call get-tiny-image with and without --outfile against the everything MCP server](docs/screenshots/example-everything-image.png)
+
 ## Commands
 
 Every command accepts the [global flags](#global-flags). Human-readable output goes to

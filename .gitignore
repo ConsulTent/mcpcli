@@ -33,6 +33,7 @@ go.work.sum
 
 # Plugin state
 .mimosa/
+.impeccable/
 /.zcode/
 
 # Editor/IDE
