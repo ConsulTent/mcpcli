@@ -269,6 +269,10 @@ jobs:
 Pin the `uses:` reference to a commit hash and keep the current release tag as the
 comment; bump both when you upgrade.
 
+The workflow also smoke-tests `mcp`'s stdio transport against
+[github-mcp-server](https://github.com/github/github-mcp-server) on every run, using the
+job's `GITHUB_TOKEN` — callers inherit that check automatically.
+
 Post the results on your README:
 
 ```markdown
