@@ -1,0 +1,71 @@
+# Reusable MCP server end-to-end check. Call it from your own repository:
+#
+#   jobs:
+#     mcp-e2e:
+#       uses: ConsulTent/mcpcli/.github/workflows/mcp-e2e.yml@<commit-hash> # vX.Y.Z
+#       with:
+#         server: https://your-mcp-server.example/mcp
+#
+# Pin to a commit hash and keep the current release tag as the comment;
+# bump both when you upgrade. See README "Test your MCP server".
+name: mcp-e2e
+
+on:
+  workflow_call:
+    inputs:
+      server:
+        description: "Your MCP server endpoint (streamable HTTP)"
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "MCP endpoint to test"
+        required: false
+        default: "https://mcp.svelte.dev/mcp"
+  schedule:
+    - cron: "0 3 * * 1"
+
+# pipefail: a failing mcp exit must not hide behind a successful jq in a pipeline
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+        include:
+          - os: ubuntu-latest
+            container:
+              image: "ghcr.io/homebrew/brew:main"
+              options: --privileged
+    runs-on: ${{ matrix.os }}
+    container: ${{ fromJSON(toJSON(matrix.container)) }}
+    env:
+      SRV: ${{ inputs.server || github.event.inputs.server || 'https://mcp.svelte.dev/mcp' }}
+    steps:
+      - run: brew install jq ConsulTent/tap/mcpcli
+      - run: mcp --version
+      - name: ping
+        run: mcp --url "$SRV" --json --timeout 60s ping | jq -e '.ok == true'
+      - name: info
+        run: mcp --url "$SRV" --json info | jq -e '.name and .protocolVersion'
+      - name: compat
+        run: mcp --url "$SRV" --json compat | jq -e '.results | length > 0'
+      - name: tools list
+        run: mcp --url "$SRV" --json tools list | jq -e '.tools | length > 0'
+      - name: call a tool
+        run: |
+          TOOL=$(mcp --url "$SRV" --json tools list | jq -r '[.tools[] | select((.inputSchema.required // []) | length == 0)][0].name // empty')
+          if [ -n "$TOOL" ]; then
+            mcp --url "$SRV" --json --timeout 60s tools call "$TOOL" >/dev/null
+          else
+            echo "no tool without required arguments; skipping call"
+          fi
+      - name: resources
+        run: mcp --url "$SRV" --json resources list >/dev/null
+      - name: prompts
+        run: mcp --url "$SRV" --json prompts list >/dev/null
