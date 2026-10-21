@@ -6,6 +6,11 @@ server over stdio or streamable HTTP to inspect its identity, capabilities, tool
 resources, and prompts, call tools, probe protocol-version compatibility, and work
 interactively in a REPL.
 
+<p align="center">
+  <a href="#install"><img src="https://raw.githubusercontent.com/ConsulTent/mcpcli/main/docs/badges/homebrew.svg" alt="Homebrew"></a>
+  <a href="LICENSE"><img src="https://raw.githubusercontent.com/ConsulTent/mcpcli/main/docs/badges/license.svg" alt="License"></a>
+</p>
+
 ## Install
 
 Requires Go 1.27.1 or newer.
@@ -242,6 +247,51 @@ handler the HTTP transport drives — and register it with one `auth.Register` c
 your type's `init()` or by extending `auth.RegisterBuiltins`). The CLI derives `--auth`
 validation and error messages from the registry, so no other change is needed. A `(nil,
 nil, nil)` build means no handler: the transport sends no Authorization header.
+
+## Test your MCP server
+
+The [`mcp-e2e`](https://github.com/ConsulTent/mcpcli/actions/workflows/mcp-e2e.yml)
+workflow in this repository is reusable. Call it from your own repository to run the
+full ladder — ping, info, protocol compat, tool discovery, a real tool call, resources,
+prompts — against your MCP server, on macOS and Linux, with `mcp` installed from the
+Homebrew tap:
+
+```yaml
+# .github/workflows/mcp-e2e.yml in YOUR repository
+on: [push, workflow_dispatch]
+jobs:
+  mcp-e2e:
+    uses: ConsulTent/mcpcli/.github/workflows/mcp-e2e.yml@87e14e7e3ea7f35c0c998f9b7747de27c4e2f8ac # v1.1.0
+    with:
+      server: https://your-mcp-server.example/mcp
+```
+
+Pin the `uses:` reference to a commit hash and keep the current release tag as the
+comment; bump both when you upgrade.
+
+The workflow also smoke-tests `mcp`'s stdio transport against
+[github-mcp-server](https://github.com/github/github-mcp-server) on every run, using the
+job's `GITHUB_TOKEN` — callers inherit that check automatically.
+
+Post the results on your README:
+
+```markdown
+[![MCP e2e tested](https://raw.githubusercontent.com/ConsulTent/mcpcli/main/docs/badges/mcp-e2e-tested.svg)](https://github.com/YOU/YOUR-REPO/actions/workflows/mcp-e2e.yml)
+[![MCP spec](https://raw.githubusercontent.com/ConsulTent/mcpcli/main/docs/badges/mcp-versions.svg)](https://modelcontextprotocol.io)
+```
+
+The `tested` badge is state-neutral. Next to it, your workflow's own status badge
+(`.../actions/workflows/mcp-e2e.yml/badge.svg`) shows the live pass/fail; a static
+[`pass` badge](https://raw.githubusercontent.com/ConsulTent/mcpcli/main/docs/badges/mcp-e2e-pass.svg)
+is available for repositories that prefer fixed art. The spec badge shows the protocol
+versions `mcp` speaks.
+
+## Dependency maintenance
+
+Renovate PRs are triaged daily: any update class is approved and merged when its CI is
+green; if main breaks, the merge is auto-reverted and flagged in an issue for manual
+fixes. Dependency rollups ship as patch releases — monthly when a month had ten or more
+updates, or immediately when a CVE/GHSA-flagged update lands.
 
 ## Output modes
 
