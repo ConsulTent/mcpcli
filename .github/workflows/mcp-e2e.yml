@@ -1,0 +1,108 @@
+# Reusable MCP server end-to-end check. Call it from your own repository:
+#
+#   jobs:
+#     mcp-e2e:
+#       uses: ConsulTent/mcpcli/.github/workflows/mcp-e2e.yml@<commit-hash> # vX.Y.Z
+#       with:
+#         server: https://your-mcp-server.example/mcp
+#
+# Pin to a commit hash and keep the current release tag as the comment;
+# bump both when you upgrade. See README "Test your MCP server".
+name: mcp-e2e
+
+on:
+  workflow_call:
+    inputs:
+      server:
+        description: "Your MCP server endpoint (streamable HTTP)"
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "MCP endpoint to test"
+        required: false
+        default: "https://mcp.svelte.dev/mcp"
+  schedule:
+    - cron: "0 3 * * 1"
+
+# pipefail: a failing mcp exit must not hide behind a successful jq in a pipeline
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+        include:
+          - os: ubuntu-latest
+            container:
+              image: "ghcr.io/homebrew/brew:main"
+              options: --privileged
+    runs-on: ${{ matrix.os }}
+    container: ${{ fromJSON(toJSON(matrix.container)) }}
+    env:
+      SRV: ${{ inputs.server || github.event.inputs.server || 'https://mcp.svelte.dev/mcp' }}
+    steps:
+      - run: brew install jq ConsulTent/tap/mcpcli
+        env:
+          # the runner injects an unwritable HOME=/github/home into container steps;
+          # step env wins over the runner default — restore each platform's real home
+          HOME: ${{ matrix.os == 'ubuntu-latest' && '/home/linuxbrew' || '/Users/runner' }}
+      - run: mcp --version
+      - name: ping
+        run: mcp --url "$SRV" --json --timeout 60s ping | jq -e '.ok == true'
+      - name: info
+        run: mcp --url "$SRV" --json info | jq -e '.serverInfo.name and .protocolVersion'
+      - name: compat
+        run: mcp --url "$SRV" --json compat | jq -e '.results | length > 0'
+      - name: tools list
+        run: mcp --url "$SRV" --json tools list | jq -e '.tools | length > 0'
+      - name: call a tool
+        run: |
+          TOOL=$(mcp --url "$SRV" --json tools list | jq -r '[.tools[] | select((.inputSchema.required // []) | length == 0)][0].name // empty')
+          if [ -n "$TOOL" ]; then
+            mcp --url "$SRV" --json --timeout 60s tools call "$TOOL" >/dev/null
+          else
+            echo "no tool without required arguments; skipping call"
+          fi
+      - name: resources
+        run: mcp --url "$SRV" --json resources list >/dev/null
+      - name: prompts
+        run: mcp --url "$SRV" --json prompts list >/dev/null
+
+  # Second target: github-mcp-server over stdio — proves mcp's stdio transport and
+  # token-authenticated server against a real, stateful MCP server. Uses the job's
+  # GITHUB_TOKEN; callers inherit this smoke test automatically.
+  github-mcp-server:
+    runs-on: ubuntu-latest
+    container:
+      image: "ghcr.io/homebrew/brew:main"
+      options: --privileged
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${{ github.token }}
+    steps:
+      - name: Install mcp and github-mcp-server
+        run: |
+          brew install jq ConsulTent/tap/mcpcli
+          GOBIN="$(brew --prefix)/bin" go install github.com/github/github-mcp-server/v2/cmd/github-mcp-server@v2.0.3
+        env:
+          HOME: /home/linuxbrew
+      - run: mcp --version
+      # ping is skipped: this server enforces the 2026-07-28 ping _meta that the SDK's
+      # Ping does not send yet (https://github.com/modelcontextprotocol/go-sdk/issues/1377)
+      - name: info
+        run: mcp --command "github-mcp-server stdio" --json --timeout 90s info | jq -e '.serverInfo.name and .protocolVersion'
+      - name: tools list
+        run: mcp --command "github-mcp-server stdio" --json --timeout 90s tools list | jq -e '.tools | length > 0'
+      # get_me is deliberately not used: GET /user rejects installation tokens like
+      # GITHUB_TOKEN; a repo-contents read is installation-token friendly.
+      - name: call get_file_contents
+        run: |
+          mcp --command "github-mcp-server stdio" --json --timeout 90s tools call get_file_contents \
+            --arg owner="${GITHUB_REPOSITORY_OWNER}" \
+            --arg repo="${GITHUB_REPOSITORY#*/}" \
+            --arg path=README.md | jq -e 'has("content") or has("text")'

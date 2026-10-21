@@ -38,6 +38,9 @@ falls back to the constant, so local builds print the baseline instead of
 
 - **Every substantive change bumps the minor version** of `Version`
   (`v1.0.0` → `v1.1.0`). Documentation-only fixes do not bump.
+- Automated dependency rollups from the Renovate triage release as **patch**
+  versions via `.github/workflows/release.yml` (monthly at ten or more updates,
+  or immediately on a CVE-flagged update).
 - Releases are cut by pushing an annotated tag `vX.Y.Z` matching the
   constant; the SLSA release workflow stamps the binary from it via build
   info.

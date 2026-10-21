@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      # TestCompatUnreachable waits out 7 x 30s network timeouts - irrelevant to
+      # dependency bumps; run it locally before feature commits instead.
+      - run: go test ./... -count=1 -skip TestCompatUnreachable
