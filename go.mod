@@ -3,7 +3,7 @@ module github.com/ConsulTent/mcpcli
 go 1.27.1
 
 require (
-	github.com/charmbracelet/bubbles v0.21.1
+	github.com/charmbracelet/bubbles/v2 v2.2.1
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
