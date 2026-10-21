@@ -54,23 +54,24 @@ jobs:
                 continue
               fi
 
-              # Wait up to 10 minutes for the PR's ci check to pass. PRs opened
-              # before ci.yml existed have no checks at all - update the branch
-              # once to fire a synchronize event and start one.
+              # Wait up to 10 minutes for OUR ci workflow on the PR branch. Renovate's
+              # own statuses (e.g. renovate/artifacts) are not gates - a broken
+              # update fails ci anyway. PRs opened before ci.yml existed have no
+              # run at all: update the branch once to fire a synchronize event.
+              BRANCH="$(gh pr view -R "$REPO" "$NUM" --json headRefName --jq .headRefName)"
               GREEN=""
               FIRST=1
               for _ in $(seq 1 20); do
-                BUCKETS="$(gh pr checks -R "$REPO" "$NUM" --json name,bucket --jq '.[].bucket' 2>/dev/null)"
-                if [ -z "$BUCKETS" ] && [ "$FIRST" = "1" ]; then
-                  gh pr update-branch -R "$REPO" "$NUM" >/dev/null 2>&1
-                  FIRST=0
-                fi
-                if echo "$BUCKETS" | grep -qx "pass" && ! echo "$BUCKETS" | grep -qx "fail"; then
-                  GREEN=1; break
-                fi
-                if echo "$BUCKETS" | grep -qx "fail"; then
-                  break
-                fi
+                RUN="$(gh run list -R "$REPO" --workflow ci.yml --branch "$BRANCH" \
+                  --json status,conclusion --jq '(.[0] // {}) | .status + "/" + (.conclusion // "-")' 2>/dev/null)"
+                case "$RUN" in
+                  "/-"|"/") if [ "$FIRST" = "1" ]; then
+                               gh pr update-branch -R "$REPO" "$NUM" >/dev/null 2>&1
+                               FIRST=0
+                             fi ;;
+                  completed/success) GREEN=1; break ;;
+                  completed/*) break ;; # failed or cancelled
+                esac
                 sleep 30
               done
               if [ -z "$GREEN" ]; then
