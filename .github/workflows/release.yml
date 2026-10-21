@@ -43,11 +43,13 @@ jobs:
           if gh release view >/dev/null 2>&1; then
             SINCE="$(gh release view --json createdAt --jq .createdAt | cut -dT -f1)"
           fi
-          TITLES="$(gh pr list --state merged --label dependencies \
-            --search "merged:>=$SINCE" --json title --jq '.[].title')"
+          TITLES="$(gh pr list --state merged --search "merged:>=$SINCE" \
+            --json title,headRefName \
+            --jq '.[] | select(.headRefName | startswith("renovate/")) | .title')"
           COUNT="$(echo "$TITLES" | grep -c . || true)"
-          CVES="$(gh pr list --state merged --label dependencies \
-            --search "merged:>=$SINCE" --json body --jq '.[].body' | grep -cE 'CVE-|GHSA-' || true)"
+          CVES="$(gh pr list --state merged --search "merged:>=$SINCE" \
+            --json body,headRefName \
+            --jq '.[] | select(.headRefName | startswith("renovate/")) | .body' | grep -cE 'CVE-|GHSA-' || true)"
           {
             echo "count=$COUNT"
             echo "since=$SINCE"

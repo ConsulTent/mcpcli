@@ -38,8 +38,10 @@ jobs:
           BLOCKED="$(gh issue list --state open --json title,body \
             --jq '.[] | select(.title | startswith("manual fix required")) | .body')"
 
-          gh pr list --label dependencies --state open \
-            --json number,title --jq '.[] | "\(.number)\t\(.title)"' \
+          # Renovate PRs are selected by branch prefix - this repository's Renovate
+          # runs apply no labels, so --label would match nothing.
+          gh pr list --state open --json number,title,headRefName \
+            --jq '.[] | select(.headRefName | startswith("renovate/")) | "\(.number)\t\(.title)"' \
           | while IFS=$'\t' read -r NUM TITLE; do
               echo "-- PR #$NUM: $TITLE"
 
@@ -111,8 +113,8 @@ jobs:
           LAST="$(gh release view --json createdAt --jq .createdAt 2>/dev/null)"
           if [ -n "$LAST" ]; then
             DATE="${LAST%%T*}"
-            HITS="$(gh pr list --state merged --label dependencies \
-              --search "merged:>=$DATE" --json body --jq '.[].body' | grep -cE 'CVE-|GHSA-')"
+            HITS="$(gh pr list --state merged --search "merged:>=$DATE" \
+              --json body,headRefName --jq '.[] | select(.headRefName | startswith("renovate/")) | .body' | grep -cE 'CVE-|GHSA-')"
             echo "== merged dependency PRs since $DATE with CVE references: $HITS"
             if [ "$HITS" -gt 0 ]; then
               echo "== triggering immediate CVE release"
