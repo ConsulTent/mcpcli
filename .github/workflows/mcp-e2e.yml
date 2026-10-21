@@ -98,5 +98,11 @@ jobs:
         run: mcp --command "github-mcp-server stdio" --json --timeout 90s info | jq -e '.serverInfo.name and .protocolVersion'
       - name: tools list
         run: mcp --command "github-mcp-server stdio" --json --timeout 90s tools list | jq -e '.tools | length > 0'
-      - name: call get_me
-        run: mcp --command "github-mcp-server stdio" --json --timeout 90s tools call get_me >/dev/null
+      # get_me is deliberately not used: GET /user rejects installation tokens like
+      # GITHUB_TOKEN; a repo-contents read is installation-token friendly.
+      - name: call get_file_contents
+        run: |
+          mcp --command "github-mcp-server stdio" --json --timeout 90s tools call get_file_contents \
+            --arg owner="${GITHUB_REPOSITORY_OWNER}" \
+            --arg repo="${GITHUB_REPOSITORY#*/}" \
+            --arg path=README.md | jq -e 'has("content") or has("text")'
