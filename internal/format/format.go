@@ -62,9 +62,10 @@ func ToolsList(w io.Writer, res *mcp.ListToolsResult, plain bool) error {
 
 // ToolCall renders a tools/call result. Text content blocks are printed raw to
 // out. If there is no text content but StructuredContent is present, it is
-// marshaled as JSON to out. Any non-text content blocks are JSON-encoded to
-// out. When the result reports IsError, everything is written to errOut and
-// ErrToolError is returned.
+// marshaled as JSON to out. Image and audio content blocks render as one
+// compact ASCII summary line each ([mime content, N bytes]); any other
+// non-text content blocks are JSON-encoded to out. When the result reports
+// IsError, everything is written to errOut and ErrToolError is returned.
 func ToolCall(out, errOut io.Writer, res *mcp.CallToolResult) error {
 	if res == nil {
 		return nil
@@ -96,8 +97,17 @@ func ToolCall(out, errOut io.Writer, res *mcp.CallToolResult) error {
 		}
 	}
 	for _, c := range others {
-		if err := EmitJSON(w, c); err != nil {
-			return err
+		// Image and audio need separate cases: a combined case would bind
+		// the mcp.Content interface, which has no Data field.
+		switch c := c.(type) {
+		case *mcp.ImageContent:
+			fmt.Fprintf(w, "[%s content, %d bytes]\n", safeMIME(c.MIMEType), len(c.Data))
+		case *mcp.AudioContent:
+			fmt.Fprintf(w, "[%s content, %d bytes]\n", safeMIME(c.MIMEType), len(c.Data))
+		default:
+			if err := EmitJSON(w, c); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -105,6 +115,24 @@ func ToolCall(out, errOut io.Writer, res *mcp.CallToolResult) error {
 		return ErrToolError
 	}
 	return nil
+}
+
+// safeMIME keeps only terminal-safe characters and caps length, mirroring
+// the CLI's safeVersion approach (format must not import internal/cli).
+// Only [A-Za-z0-9/+. -] survives, capped at 64 runes, so a server-controlled
+// MIME string cannot carry ANSI escapes into the summary line.
+func safeMIME(s string) string {
+	const max = 64
+	var b []byte
+	for i := 0; i < len(s) && len(b) < max; i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z',
+			c == '/', c == '+', c == '.', c == ' ', c == '-':
+			b = append(b, c)
+		}
+	}
+	return string(b)
 }
 
 // ResourcesList renders resources/list and resources/templates/list results as

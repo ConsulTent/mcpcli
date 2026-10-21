@@ -101,23 +101,81 @@ func TestToolCallStructuredJSON(t *testing.T) {
 	}
 }
 
-func TestToolCallNonTextJSONEncoded(t *testing.T) {
-	res := &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: "look"},
-			&mcp.ImageContent{MIMEType: "image/png", Data: []byte("ff00ff")},
-		},
+func TestToolCallMediaSummaryLines(t *testing.T) {
+	t.Run("image renders one summary line", func(t *testing.T) {
+		res := &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.ImageContent{Data: []byte("a1b2c3"), MIMEType: "image/png"},
+			},
+		}
+		var out, errOut bytes.Buffer
+		if err := ToolCall(&out, &errOut, res); err != nil {
+			t.Fatalf("ToolCall() error = %v", err)
+		}
+		if got, want := out.String(), "[image/png content, 6 bytes]\n"; got != want {
+			t.Errorf("ToolCall() stdout = %q, want %q", got, want)
+		}
+		if errOut.Len() != 0 {
+			t.Errorf("ToolCall() stderr = %q, want empty", errOut.String())
+		}
+	})
+
+	t.Run("audio renders one summary line", func(t *testing.T) {
+		res := &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.AudioContent{Data: []byte("xyz12345"), MIMEType: "audio/mpeg"},
+			},
+		}
+		var out, errOut bytes.Buffer
+		if err := ToolCall(&out, &errOut, res); err != nil {
+			t.Fatalf("ToolCall() error = %v", err)
+		}
+		if got, want := out.String(), "[audio/mpeg content, 8 bytes]\n"; got != want {
+			t.Errorf("ToolCall() stdout = %q, want %q", got, want)
+		}
+		if errOut.Len() != 0 {
+			t.Errorf("ToolCall() stderr = %q, want empty", errOut.String())
+		}
+	})
+
+	t.Run("other non-text blocks stay JSON-encoded", func(t *testing.T) {
+		res := &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: "look"},
+				&mcp.EmbeddedResource{Resource: &mcp.ResourceContents{URI: "mem://x", Text: "hi"}},
+			},
+		}
+		var out, errOut bytes.Buffer
+		if err := ToolCall(&out, &errOut, res); err != nil {
+			t.Fatalf("ToolCall() error = %v", err)
+		}
+		outStr := out.String()
+		if !strings.Contains(outStr, "look\n") {
+			t.Errorf("ToolCall() stdout missing raw text, got %q", outStr)
+		}
+		if !strings.Contains(outStr, `"uri": "mem://x"`) {
+			t.Errorf("ToolCall() stdout missing JSON-encoded embedded resource, got %q", outStr)
+		}
+	})
+}
+
+func TestSafeMIME(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"passthrough", "image/png", "image/png"},
+		{"strips escapes", "image/png\x1b]0;pwned\x07", "image/png0pwned"},
+		{"caps length", strings.Repeat("a", 100), strings.Repeat("a", 64)},
+		{"empty", "", ""},
 	}
-	var out, errOut bytes.Buffer
-	if err := ToolCall(&out, &errOut, res); err != nil {
-		t.Fatalf("ToolCall() error = %v", err)
-	}
-	outStr := out.String()
-	if !strings.Contains(outStr, "look\n") {
-		t.Errorf("ToolCall() stdout missing raw text, got %q", outStr)
-	}
-	if !strings.Contains(outStr, `"mimeType": "image/png"`) {
-		t.Errorf("ToolCall() stdout missing JSON-encoded image block, got %q", outStr)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := safeMIME(tt.in); got != tt.want {
+				t.Errorf("safeMIME(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
