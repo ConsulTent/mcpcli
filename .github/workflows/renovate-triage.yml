@@ -24,7 +24,8 @@ jobs:
   triage:
     runs-on: ubuntu-latest
     env:
-      PAT: ${{ secrets.GH_PAT }}
+      GH_TOKEN: ${{ github.token }} # default identity: list/review/comment/issue
+      PAT: ${{ secrets.GH_PAT }} # merge/revert identity (can push to main)
     steps:
       - name: Triage dependency PRs
         run: |
