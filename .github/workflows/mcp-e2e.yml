@@ -42,6 +42,9 @@ jobs:
             container:
               image: "ghcr.io/homebrew/brew:main"
               options: --privileged
+              env:
+                # the runner overrides HOME to an unwritable /github/home; use the image's own
+                HOME: /home/linuxbrew
     runs-on: ${{ matrix.os }}
     container: ${{ fromJSON(toJSON(matrix.container)) }}
     env:
@@ -52,7 +55,7 @@ jobs:
       - name: ping
         run: mcp --url "$SRV" --json --timeout 60s ping | jq -e '.ok == true'
       - name: info
-        run: mcp --url "$SRV" --json info | jq -e '.name and .protocolVersion'
+        run: mcp --url "$SRV" --json info | jq -e '.serverInfo.name and .protocolVersion'
       - name: compat
         run: mcp --url "$SRV" --json compat | jq -e '.results | length > 0'
       - name: tools list
