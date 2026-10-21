@@ -77,7 +77,12 @@ jobs:
                 sleep 30
               done
               if [ -z "$GREEN" ]; then
-                gh pr comment -R "$REPO" "$NUM" -b "renovate-triage: skipped (ci not green)"
+                # one skip note per PR, not one per daily run
+                NOTES="$(gh pr view -R "$REPO" "$NUM" --json comments \
+                  --jq '[.[].body | select(contains("renovate-triage: skipped"))] | length' 2>/dev/null)"
+                if [ "${NOTES:-0}" = "0" ]; then
+                  gh pr comment -R "$REPO" "$NUM" -b "renovate-triage: skipped (ci not green)" >/dev/null 2>&1
+                fi
                 echo "   skip: ci not green"
                 continue
               fi
