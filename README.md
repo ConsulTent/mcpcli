@@ -23,9 +23,10 @@ go build -o mcp ./cmd/mcp
 ```
 
 `go install ./cmd/mcp` from the checkout root installs into `$(go env GOPATH)/bin`
-instead of the current directory. A locally built binary reports the baseline
-version from `internal/version` (e.g. `v1.1.0`); only release builds carry the
-git tag stamp.
+instead of the current directory. A binary built at a release tag reports that
+tag; one built from commits past the tag reports a Go pseudo-version (e.g.
+`v1.1.1-0.20261021…-<hash>`); the `internal/version` constant is the fallback
+when no VCS stamp is embedded.
 
 ## Quickstart
 
@@ -285,7 +286,8 @@ credentials, …).
 ## Known limitations
 
 - REPL input is split on whitespace; quoting is not supported, so a `JSON-OBJ` argument
-  must be a single whitespace-free JSON object (e.g. `call echo {"msg":"hi"}`).
+  must be a single whitespace-free JSON object (e.g. `call echo {"msg":"hi"}`), and
+  `--outfile` paths must likewise be whitespace-free.
 - Prompt arguments are strings per the MCP spec: `--arg` values are never JSON-decoded,
   and the REPL's `get` accepts only scalar (string/number/boolean) values.
 - stdio servers cannot authenticate (`--auth` is rejected with `--command`).
