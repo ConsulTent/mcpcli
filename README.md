@@ -261,7 +261,7 @@ Homebrew tap:
 on: [push, workflow_dispatch]
 jobs:
   mcp-e2e:
-    uses: ConsulTent/mcpcli/.github/workflows/mcp-e2e.yml@0000000000000000000000000000000000000000 # v1.1.0
+    uses: ConsulTent/mcpcli/.github/workflows/mcp-e2e.yml@f01748416c4f02d30b7bafe46cf496a116b25664 # v1.1.0
     with:
       server: https://your-mcp-server.example/mcp
 ```
