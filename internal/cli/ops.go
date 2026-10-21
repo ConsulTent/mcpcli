@@ -35,10 +35,23 @@ func opListTools(ctx context.Context, s *mcp.ClientSession, out io.Writer) error
 // opCallTool mirrors "tools call NAME". In --json mode an isError result is
 // still data: the full result reaches stdout first, then ErrToolError is
 // returned so the caller can fail with the right exit semantics.
-func opCallTool(ctx context.Context, s *mcp.ClientSession, name string, args map[string]any, out, errOut io.Writer) error {
+//
+// A non-empty outfile diverts image/audio blocks to files (write first, so a
+// write failure fails fast) before the result renders in either mode. An
+// isError result never writes, whatever outfile says.
+func opCallTool(ctx context.Context, s *mcp.ClientSession, name string, args map[string]any, out, errOut io.Writer, outfile string) error {
 	res, err := s.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
 		return fmt.Errorf("call tool %s: %w", name, err)
+	}
+	if outfile != "" && !res.IsError {
+		medias := toolMedia(res)
+		if len(medias) == 0 {
+			return fmt.Errorf("--outfile: no image or audio content in tool result")
+		}
+		if err := writeMediaFiles(outfile, medias, errOut); err != nil {
+			return err
+		}
 	}
 	if ui.Current == ui.JSON {
 		if err := format.EmitJSON(out, res); err != nil {
@@ -75,16 +88,41 @@ func opListResources(ctx context.Context, s *mcp.ClientSession, out io.Writer) e
 	return format.ResourcesList(out, res, tpls, ui.Current == ui.Plain)
 }
 
-// opReadResource mirrors "resources read URI".
-func opReadResource(ctx context.Context, s *mcp.ClientSession, uri string, out io.Writer) error {
+// opReadResource mirrors "resources read URI". A non-empty outfile diverts
+// blob entries to files; text entries still print on stdout. Media
+// extraction and every failure happen before a single content byte reaches
+// stdout, so a text-only resource with --outfile errors with nothing printed.
+// In --json mode the full document still reaches stdout after the write.
+func opReadResource(ctx context.Context, s *mcp.ClientSession, uri string, out, errOut io.Writer, outfile string) error {
 	res, err := s.ReadResource(ctx, &mcp.ReadResourceParams{URI: uri})
 	if err != nil {
 		return fmt.Errorf("read resource %s: %w", uri, err)
 	}
+	if outfile == "" {
+		if ui.Current == ui.JSON {
+			return format.EmitJSON(out, res)
+		}
+		return format.ResourceRead(out, res)
+	}
+	medias := resourceMedia(res)
+	if len(medias) == 0 {
+		return fmt.Errorf("--outfile: no binary content in resource")
+	}
+	if err := writeMediaFiles(outfile, medias, errOut); err != nil {
+		return err
+	}
 	if ui.Current == ui.JSON {
 		return format.EmitJSON(out, res)
 	}
-	return format.ResourceRead(out, res)
+	// Blob entries diverted to files; render only the non-blob (text) ones
+	// through the shared formatter.
+	textOnly := &mcp.ReadResourceResult{}
+	for _, rc := range res.Contents {
+		if rc != nil && len(rc.Blob) == 0 {
+			textOnly.Contents = append(textOnly.Contents, rc)
+		}
+	}
+	return format.ResourceRead(out, textOnly)
 }
 
 // opListPrompts mirrors "prompts list".

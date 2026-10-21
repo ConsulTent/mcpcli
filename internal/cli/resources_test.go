@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,5 +106,72 @@ func TestResourcesReadE2E(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "line one\nline two") {
 		t.Errorf("resources read stdout %q does not carry the resource text verbatim", stdout)
+	}
+}
+
+// addImageBlobResource registers a resource whose read result has two
+// contents: a text entry and a gif blob entry, so --outfile tests can assert
+// that text still prints while the blob diverts to a file.
+func addImageBlobResource(s *mcp.Server) {
+	s.AddResource(&mcp.Resource{
+		URI:         "mem://img",
+		Name:        "img",
+		Description: "A text about an image plus its bytes",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{
+			{URI: req.Params.URI, MIMEType: "text/plain", Text: "about the image"},
+			{URI: req.Params.URI, MIMEType: "image/gif", Blob: []byte("GIFDATA")},
+		}}, nil
+	})
+}
+
+// TestResourcesReadOutfile: with --outfile the blob entry diverts to a
+// MIME-derived file while the text entry still prints on stdout.
+func TestResourcesReadOutfile(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, addImageBlobResource)
+	tmp := t.TempDir()
+	base := filepath.Join(tmp, "res")
+
+	stdout, stderr, _, err := runRoot(t, "--url", srv.URL, "resources", "read", "mem://img", "--outfile", base)
+	if err != nil {
+		t.Fatalf("resources read --outfile: %v", err)
+	}
+	got, err := os.ReadFile(base + ".gif")
+	if err != nil {
+		t.Fatalf("read res.gif: %v", err)
+	}
+	if string(got) != "GIFDATA" {
+		t.Errorf("res.gif = %q, want GIFDATA", got)
+	}
+	if !strings.Contains(stdout, "about the image") {
+		t.Errorf("stdout %q does not still print the text entry", stdout)
+	}
+	if strings.Contains(stdout, "GIFDATA") {
+		t.Errorf("stdout %q leaks the blob bytes; they belong in the file", stdout)
+	}
+	if !strings.Contains(stderr, "wrote") {
+		t.Errorf("stderr %q lacks the wrote notice", stderr)
+	}
+}
+
+// TestResourcesReadOutfileText: a text-only resource with --outfile is an
+// error (exit 1) with nothing printed to stdout and no file written.
+func TestResourcesReadOutfileText(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, addLogResource)
+	tmp := t.TempDir()
+
+	stdout, _, _, err := runRoot(t, "--url", srv.URL, "resources", "read", "file:///logs/app.log", "--outfile", filepath.Join(tmp, "res"))
+	if err == nil || !strings.Contains(err.Error(), "no binary content") {
+		t.Fatalf("text-only read with --outfile = %v, want the no-binary-content error", err)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty: the error must precede any printing", stdout)
+	}
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("text-only read created files: %v", entries)
 	}
 }

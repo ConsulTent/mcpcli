@@ -244,3 +244,143 @@ func TestToolsCallBadPairFailsFast(t *testing.T) {
 		t.Fatalf("tools call with bad pair = %v, want an error naming the pair", err)
 	}
 }
+
+// addImageTool registers a tool whose result is one image content block with
+// fixed decoded bytes, so --outfile tests can assert the exact file content.
+func addImageTool(s *mcp.Server) {
+	s.AddTool(&mcp.Tool{
+		Name:        "gen",
+		Description: "Returns one image",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{
+			&mcp.ImageContent{Data: []byte("PNGDATA"), MIMEType: "image/png"},
+		}}, nil
+	})
+}
+
+// addTwoImageTool registers a tool whose result is two image content blocks,
+// so --outfile must number the saved files.
+func addTwoImageTool(s *mcp.Server) {
+	s.AddTool(&mcp.Tool{
+		Name:        "twogen",
+		Description: "Returns two images",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{
+			&mcp.ImageContent{Data: []byte("PNGDATA1"), MIMEType: "image/png"},
+			&mcp.ImageContent{Data: []byte("PNGDATA2"), MIMEType: "image/png"},
+		}}, nil
+	})
+}
+
+// TestToolsCallOutfile: --outfile saves the image block's decoded bytes to a
+// file with the MIME-derived extension, prints the summary line on stdout and
+// the wrote notice on stderr, and a --plain run stays byte-ASCII.
+func TestToolsCallOutfile(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, addImageTool)
+	tmp := t.TempDir()
+	base := filepath.Join(tmp, "img")
+
+	stdout, stderr, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "gen", "--outfile", base)
+	if err != nil {
+		t.Fatalf("tools call --outfile: %v", err)
+	}
+	got, err := os.ReadFile(base + ".png")
+	if err != nil {
+		t.Fatalf("read img.png: %v", err)
+	}
+	if string(got) != "PNGDATA" {
+		t.Errorf("img.png = %q, want PNGDATA", got)
+	}
+	if !strings.Contains(stdout, "[image/png content, 7 bytes]") {
+		t.Errorf("stdout %q lacks the image summary line", stdout)
+	}
+	if !strings.Contains(stderr, "wrote") || !strings.Contains(stderr, "(7 bytes)") {
+		t.Errorf("stderr %q lacks the wrote notice with the byte count", stderr)
+	}
+
+	// Plain-mode purity: the same run under --plain writes no non-ASCII or
+	// escape byte to stdout.
+	stdout, _, _, err = runRoot(t, "--url", srv.URL, "--plain", "tools", "call", "gen", "--outfile", filepath.Join(tmp, "plain"))
+	if err != nil {
+		t.Fatalf("tools call --outfile --plain: %v", err)
+	}
+	for i := 0; i < len(stdout); i++ {
+		if b := stdout[i]; b >= 0x80 || b == 0x1b {
+			t.Fatalf("plain stdout has byte 0x%02x at offset %d: %q", b, i, stdout)
+		}
+	}
+}
+
+// TestToolsCallOutfileMultiple: two image blocks land in numbered files, each
+// with its own exact bytes.
+func TestToolsCallOutfileMultiple(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, addTwoImageTool)
+	tmp := t.TempDir()
+	base := filepath.Join(tmp, "img")
+
+	_, _, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "twogen", "--outfile", base)
+	if err != nil {
+		t.Fatalf("tools call twogen --outfile: %v", err)
+	}
+	for name, want := range map[string]string{
+		"img.1.png": "PNGDATA1",
+		"img.2.png": "PNGDATA2",
+	} {
+		got, err := os.ReadFile(filepath.Join(tmp, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestToolsCallOutfileNoMedia: --outfile on a text-only tool result is an
+// error (exit 1) and no file is created.
+func TestToolsCallOutfileNoMedia(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, addEchoTool)
+	tmp := t.TempDir()
+
+	_, _, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "echo", "--outfile", filepath.Join(tmp, "img"))
+	if err == nil || !strings.Contains(err.Error(), "no image or audio content") {
+		t.Fatalf("text-only call with --outfile = %v, want the no-media error", err)
+	}
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("no-media call created files: %v", entries)
+	}
+}
+
+// TestToolsCallOutfileJSON: in --json mode the full CallToolResult document
+// still reaches stdout (base64 data included) and the file is written with the
+// decoded bytes.
+func TestToolsCallOutfileJSON(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, addImageTool)
+	tmp := t.TempDir()
+	base := filepath.Join(tmp, "img")
+
+	stdout, _, _, err := runRoot(t, "--url", srv.URL, "--json", "tools", "call", "gen", "--outfile", base)
+	if err != nil {
+		t.Fatalf("tools call --json --outfile: %v", err)
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("tools call --json --outfile stdout %q is not one JSON document: %v", stdout, err)
+	}
+	if !strings.Contains(stdout, "UE5HREFUQQ==") { // base64("PNGDATA")
+		t.Errorf("json stdout %q lacks the base64 image data", stdout)
+	}
+	got, err := os.ReadFile(base + ".png")
+	if err != nil {
+		t.Fatalf("read img.png: %v", err)
+	}
+	if string(got) != "PNGDATA" {
+		t.Errorf("img.png = %q, want the decoded PNGDATA", got)
+	}
+}

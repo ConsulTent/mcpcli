@@ -24,7 +24,7 @@ go build -o mcp ./cmd/mcp
 
 `go install ./cmd/mcp` from the checkout root installs into `$(go env GOPATH)/bin`
 instead of the current directory. A locally built binary reports the baseline
-version from `internal/version` (e.g. `v1.0.1`); only release builds carry the
+version from `internal/version` (e.g. `v1.1.0`); only release builds carry the
 git tag stamp.
 
 ## Quickstart
@@ -95,9 +95,9 @@ one JSON document of its result on stdout.
 | `ping` | One timed round trip; prints e.g. `✅ pong in 12ms` |
 | `compat` | Probe every protocol version mcp can speak against the server |
 | `tools list` | List the server's tools |
-| `tools call NAME` | Call a tool with `--arg`/`--arg-file` arguments |
+| `tools call NAME` | Call a tool with `--arg`/`--arg-file` arguments (`--outfile` saves image/audio content to files) |
 | `resources list` | List static resources and URI templates |
-| `resources read URI` | Read one resource and print its contents |
+| `resources read URI` | Read one resource and print its contents (`--outfile` saves binary blobs) |
 | `prompts list` | List the server's prompts |
 | `prompts get NAME` | Fetch a prompt with `--arg` string arguments |
 | `auth login` | Run the OAuth flow against an HTTP server and cache the token |
@@ -117,10 +117,32 @@ mcp --command "npx -y @modelcontextprotocol/server-everything" tools call add --
   raw strings otherwise. Repeated keys: the last one wins.
 - `-A/--arg-file FILE` loads a JSON object of arguments (`-` reads stdin). The file loads
   first and `--arg` pairs override it key by key.
+- `--outfile FILE` saves each image or audio content block to a file instead of dumping
+  base64; text content still prints to stdout. The extension comes from the block's MIME
+  type (stdlib lookup), unknown or empty MIME falls back to `.bin`, and any user-supplied
+  extension is replaced (`shot.jpg` + `image/png` → `shot.png`). Multiple blocks are
+  numbered from 1 (`name.1.png`, `name.2.png`, …); a single block gets no number
+  (`name.png`). Every save prints `wrote image.1.png (1234567 bytes)` to stderr, in every
+  mode including `--json` — where the full result document still prints on stdout and the
+  file is still written. Human and `--plain` modes render image/audio blocks as one ASCII
+  summary line each: `[image/png content, 1234567 bytes]`. Existing files are overwritten
+  without asking (curl `-o` behavior). `--outfile` set but no image/audio content in the
+  result is an error (exit 1).
 - Arguments are parsed before any connection is opened, so malformed input fails fast
   without touching the network.
-- A tool result with `isError` set fails the command (exit 1). In `--json` mode the full
-  `CallToolResult` still reaches stdout first.
+- A tool result with `isError` set fails the command (exit 1) and never writes `--outfile`
+  files. In `--json` mode the full `CallToolResult` still reaches stdout first.
+
+### resources read
+
+```
+mcp --url https://mcp.svelte.dev/mcp resources read svelte://ai/overview.md
+```
+
+`--outfile FILE` saves each binary blob resource content to a file with the
+MIME-derived extension (same rules as `tools call`), while text contents still print to
+stdout. A text-only resource with `--outfile` set fails (exit 1). Without `--outfile`,
+blob bytes print raw to stdout — redirect with `>`.
 
 ### prompts get
 
@@ -230,8 +252,9 @@ mcp -i --command "npx -y @modelcontextprotocol/server-everything"
 
 `-i/--interactive` opens the server and hands the session to a line-based REPL. It takes
 no subcommand. The `mcp>` prompt and all errors go to stderr; results go to stdout.
-REPL commands: `help`, `tools`, `call NAME [JSON-OBJ]`, `resources`, `read URI`,
-`prompts`, `get NAME [JSON-OBJ]`, `info`, `ping`, `exit`/`quit`. In `--json` mode there is
+REPL commands: `help`, `tools`, `call NAME [JSON-OBJ] [--outfile FILE]`,
+`resources`, `read URI [--outfile FILE]`, `prompts`, `get NAME [JSON-OBJ]`, `info`,
+`ping`, `exit`/`quit`. In `--json` mode there is
 no prompt and errors are `{"error":"…"}` documents on stderr.
 
 In the REPL, `--timeout` is per command: each line runs under its own `--timeout` window

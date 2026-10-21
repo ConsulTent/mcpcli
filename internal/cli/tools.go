@@ -49,6 +49,7 @@ func newToolsCallCommand() *cobra.Command {
 	var (
 		pairs   []string
 		argFile string
+		outfile string
 	)
 	cmd := &cobra.Command{
 		Use:   "call NAME",
@@ -70,12 +71,13 @@ as raw strings otherwise.`,
 				return err
 			}
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
-				return opCallTool(ctx, session, args[0], toolArgs, cmd.OutOrStdout(), cmd.ErrOrStderr())
+				return opCallTool(ctx, session, args[0], toolArgs, cmd.OutOrStdout(), cmd.ErrOrStderr(), outfile)
 			})
 		},
 	}
 	cmd.Flags().StringArrayVar(&pairs, "arg", nil, "tool argument as KEY=VALUE; value is JSON-decoded when it parses as JSON, else a raw string (repeatable, last wins)")
 	cmd.Flags().StringVarP(&argFile, "arg-file", "A", "", `JSON object of tool arguments from FILE ("-" for stdin); --arg pairs override it`)
+	cmd.Flags().StringVar(&outfile, "outfile", "", "write image/audio content to FILE; extension from MIME type, numbered NAME.N.EXT when multiple")
 	return cmd
 }
 

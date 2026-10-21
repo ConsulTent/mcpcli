@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -188,12 +190,12 @@ func TestReplBadLinesKeepLoopAlive(t *testing.T) {
 		t.Errorf("stdout %q does not list the tools after the bad lines; the loop did not survive", stdout)
 	}
 	for _, want := range []string{
-		"usage: call NAME [JSON-OBJ]",
+		"usage: call NAME [JSON-OBJ] [--outfile FILE]",
 		"JSON object",
 		"nosuchtool",
 		"usage: get NAME [JSON-OBJ]",
 		"scalar",
-		"usage: read URI",
+		"usage: read URI [--outfile FILE]",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr %q does not report %q", stderr, want)
@@ -343,5 +345,61 @@ func TestInteractiveE2E(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), replPrompt) {
 		t.Errorf("-i stderr %q does not carry the prompt", errBuf.String())
+	}
+}
+
+// TestReplCallOutfile: the REPL's "call" accepts a trailing --outfile FILE
+// pair and saves the tool's image block, mirroring "tools call".
+func TestReplCallOutfile(t *testing.T) {
+	session := openTestSession(t, newTestMCPServerWithTools(t, func(s *mcp.Server) {
+		addImageTool(s)
+		addImageBlobResource(s)
+	}))
+	base := filepath.Join(t.TempDir(), "r")
+
+	stdout, stderr, err := driveRepl(t, session, "call gen --outfile "+base+"\nexit\n", ui.Rich)
+	if err != nil {
+		t.Fatalf("repl call --outfile: %v", err)
+	}
+	got, rerr := os.ReadFile(base + ".png")
+	if rerr != nil {
+		t.Fatalf("read %s.png: %v", base, rerr)
+	}
+	if string(got) != "PNGDATA" {
+		t.Errorf("%s.png = %q, want PNGDATA", base, got)
+	}
+	if !strings.Contains(stdout, "[image/png content, 7 bytes]") {
+		t.Errorf("stdout %q lacks the image summary line", stdout)
+	}
+	if !strings.Contains(stderr, "wrote") {
+		t.Errorf("stderr %q lacks the wrote notice", stderr)
+	}
+}
+
+// TestReplReadOutfile: the REPL's "read" accepts a trailing --outfile FILE
+// pair and saves the resource blob, mirroring "resources read".
+func TestReplReadOutfile(t *testing.T) {
+	session := openTestSession(t, newTestMCPServerWithTools(t, func(s *mcp.Server) {
+		addImageTool(s)
+		addImageBlobResource(s)
+	}))
+	base := filepath.Join(t.TempDir(), "r")
+
+	stdout, stderr, err := driveRepl(t, session, "read mem://img --outfile "+base+"\nexit\n", ui.Rich)
+	if err != nil {
+		t.Fatalf("repl read --outfile: %v", err)
+	}
+	got, rerr := os.ReadFile(base + ".gif")
+	if rerr != nil {
+		t.Fatalf("read %s.gif: %v", base, rerr)
+	}
+	if string(got) != "GIFDATA" {
+		t.Errorf("%s.gif = %q, want GIFDATA", base, got)
+	}
+	if strings.Contains(stdout, "GIFDATA") {
+		t.Errorf("stdout %q leaks the blob bytes; they belong in the file", stdout)
+	}
+	if !strings.Contains(stderr, "wrote") {
+		t.Errorf("stderr %q lacks the wrote notice", stderr)
 	}
 }

@@ -55,6 +55,7 @@ The flow runs `cmd/mcp/main.go` → `internal/cli` (cobra tree) → `runWithConn
 - `ui.Current` is a package global (`Rich`/`Plain`/`JSON`) set once per run.
 - `--json`: each command emits one `format.EmitJSON` document of the SDK result struct, and the ui layer writes nothing.
 - `--plain`: output must contain zero non-ASCII and zero ANSI-escape bytes. Tests assert this.
+- Image/audio content blocks render as one ASCII summary line each (`[image/png content, N bytes]`); `--outfile` (tools call, resources read, REPL call/read) writes image/audio blocks and resource blobs to files with MIME-derived extensions and prints `wrote` notices to stderr in every mode.
 - `internal/format` is pure formatting with no mode logic, colors or emoji. Callers choose between a formatter and `EmitJSON`.
 - A tool result with `isError` returns `format.ErrToolError` (exit 1). In `--json` mode the full result still reaches stdout first.
 - The `--client-secret` warning is written directly to stderr in every mode, `--json` included. Keep it that way.

@@ -36,6 +36,11 @@ protocol compatibility). Full human-facing detail lives in `README.md`.
   the full JSON result still reaches stdout first, then the command exits 1.
 - `--timeout` bounds each network operation (default 30s). Set it explicitly
   in scripts so a slow server cannot hang a step.
+- Tool image/audio blocks render as one ASCII summary line each, never a
+  base64 dump; resource blob contents print raw bytes unless `--outfile`
+  diverts them. `--outfile` on `tools call`, `resources read`, and the REPL's
+  `call`/`read` writes media content to files with MIME-derived extensions,
+  printing `wrote …` notices to stderr in every mode.
 
 ### Global flags
 
@@ -74,6 +79,7 @@ Discover tools, then call one (arguments JSON-decode when they parse:
 ```sh
 mcp --url "$SRV" --json tools list
 mcp --url "$SRV" --json tools call resolve-library-id --arg query=svelte --arg libraryName=svelte
+mcp --url "$SRV" --json tools call generate-logo --arg prompt="red circle" --outfile logo.png
 ```
 
 A tool error (`isError: true`) still prints the full JSON result, exit 1.
@@ -83,6 +89,7 @@ Resources and prompts (prompt arguments are always raw strings):
 ```sh
 mcp --url "$SRV" --json resources list
 mcp --url "$SRV" --json resources read svelte://ai/overview.md
+mcp --url "$SRV" --json resources read config://badge.png --outfile badge.png
 mcp --url "$SRV" --json prompts list
 mcp --url "$SRV" --json prompts get svelte-task --arg task="fix my component"
 ```
@@ -113,6 +120,6 @@ mcp --command "npx -y @modelcontextprotocol/server-everything" --json tools list
 
 The REPL (`mcp -i --url ...`) holds one session open for many operations;
 the prompt goes to stderr and results to stdout, so piped stdout stays
-parseable. REPL commands: `help`, `tools`, `call NAME [JSON-OBJ]`,
-`resources`, `read URI`, `prompts`, `get NAME [JSON-OBJ]`, `info`, `ping`,
-`exit`/`quit`. Each line runs under its own `--timeout` window.
+parseable. REPL commands: `help`, `tools`, `call NAME [JSON-OBJ] [--outfile FILE]`,
+`resources`, `read URI [--outfile FILE]`, `prompts`, `get NAME [JSON-OBJ]`, `info`,
+`ping`, `exit`/`quit`. Each line runs under its own `--timeout` window.

@@ -39,16 +39,20 @@ func newResourcesListCommand() *cobra.Command {
 }
 
 // newResourcesReadCommand builds "resources read URI": fetch one resource and
-// print its contents, or the raw ReadResourceResult in --json mode.
+// print its contents, or the raw ReadResourceResult in --json mode. With
+// --outfile, blob contents divert to files while text contents still print.
 func newResourcesReadCommand() *cobra.Command {
-	return &cobra.Command{
+	var outfile string
+	cmd := &cobra.Command{
 		Use:   "read URI",
 		Short: "Read a resource by URI and print its contents",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
-				return opReadResource(ctx, session, args[0], cmd.OutOrStdout())
+				return opReadResource(ctx, session, args[0], cmd.OutOrStdout(), cmd.ErrOrStderr(), outfile)
 			})
 		},
 	}
+	cmd.Flags().StringVar(&outfile, "outfile", "", "write binary (blob) content to FILE; extension from MIME type, numbered NAME.N.EXT when multiple")
+	return cmd
 }
