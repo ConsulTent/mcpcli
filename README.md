@@ -282,4 +282,4 @@ credentials, …).
 ## License
 
 Copyright ConsulTent Pte. Ltd., all Rights Reserved. — https://consultent.ltd.
-All code is licensed under the [LGPL-2.1](LICENSE).
+All code is licensed under the [GNU AGPL-3.0](LICENSE).
