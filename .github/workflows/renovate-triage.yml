@@ -66,7 +66,9 @@ jobs:
                   --json status,conclusion --jq '(.[0] // {}) | .status + "/" + (.conclusion // "-")' 2>/dev/null)"
                 case "$RUN" in
                   "/-"|"/") if [ "$FIRST" = "1" ]; then
-                               gh pr update-branch -R "$REPO" "$NUM" >/dev/null 2>&1
+                               # PAT, not GITHUB_TOKEN: token-pushed events are the
+                               # only ones that trigger the ci workflow
+                               GH_TOKEN="$PAT" gh pr update-branch -R "$REPO" "$NUM" >/dev/null 2>&1
                                FIRST=0
                              fi ;;
                   completed/success) GREEN=1; break ;;
