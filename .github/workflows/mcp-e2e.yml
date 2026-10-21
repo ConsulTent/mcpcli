@@ -42,15 +42,16 @@ jobs:
             container:
               image: "ghcr.io/homebrew/brew:main"
               options: --privileged
-              env:
-                # the runner overrides HOME to an unwritable /github/home; use the image's own
-                HOME: /home/linuxbrew
     runs-on: ${{ matrix.os }}
     container: ${{ fromJSON(toJSON(matrix.container)) }}
     env:
       SRV: ${{ inputs.server || github.event.inputs.server || 'https://mcp.svelte.dev/mcp' }}
     steps:
       - run: brew install jq ConsulTent/tap/mcpcli
+        env:
+          # the runner injects an unwritable HOME=/github/home into container steps;
+          # step env wins over the runner default — restore each platform's real home
+          HOME: ${{ matrix.os == 'ubuntu-latest' && '/home/linuxbrew' || '/Users/runner' }}
       - run: mcp --version
       - name: ping
         run: mcp --url "$SRV" --json --timeout 60s ping | jq -e '.ok == true'
