@@ -8,11 +8,11 @@ import (
 	"slices"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	"github.com/ConsulTent/mcpcli/internal/connection"
 	"github.com/ConsulTent/mcpcli/internal/format"
 	"github.com/ConsulTent/mcpcli/internal/ui"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )

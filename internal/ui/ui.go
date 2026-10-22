@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Mode selects the decoration level for every function in this package.
@@ -225,9 +225,10 @@ type spinnerModel struct {
 }
 
 func newSpinnerModel(label string) spinnerModel {
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	s := spinner.New(
+		spinner.WithSpinner(spinner.Dot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
+	)
 	return spinnerModel{spinner: s, label: label}
 }
 
@@ -243,11 +244,11 @@ func (m spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m spinnerModel) View() string {
+func (m spinnerModel) View() tea.View {
 	if m.done {
-		return ""
+		return tea.NewView("")
 	}
-	return m.spinner.View() + " " + m.label + "…"
+	return tea.NewView(m.spinner.View() + " " + m.label + "…")
 }
 
 // isTerminal reports whether w is (likely) an interactive terminal, via the

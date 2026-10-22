@@ -11,9 +11,9 @@ import (
 	"io"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	"github.com/ConsulTent/mcpcli/internal/version"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
