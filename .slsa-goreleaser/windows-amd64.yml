@@ -1,9 +1,0 @@
-version: 1
-env:
-  - CGO_ENABLED=0
-flags:
-  - -trimpath
-goos: windows
-goarch: amd64
-main: ./cmd/mcp
-binary: mcp-windows-amd64.exe

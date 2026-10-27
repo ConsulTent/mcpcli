@@ -42,8 +42,8 @@ falls back to the constant, so local builds print the baseline instead of
   versions via `.github/workflows/release.yml` (monthly at ten or more updates,
   or immediately on a CVE-flagged update).
 - Releases are cut by pushing an annotated tag `vX.Y.Z` matching the
-  constant; the SLSA release workflow stamps the binary from it via build
-  info.
+  constant; the release-build workflow stamps the binary from it via build
+  info and attests it with GitHub artifact attestations.
 
 ## Skills to load (before touching the relevant area — not from memory)
 

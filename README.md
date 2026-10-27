@@ -33,6 +33,13 @@ cd mcpcli
 go build -o mcp ./cmd/mcp
 ```
 
+Release binaries carry GitHub artifact attestations — verify one after
+downloading:
+
+```
+gh attestation verify mcp-<os>-<arch> --repo ConsulTent/mcpcli
+```
+
 `go install ./cmd/mcp` from the checkout root installs into `$(go env GOPATH)/bin`
 instead of the current directory. A binary built at a release tag reports that
 tag; one built from commits past the tag reports a Go pseudo-version (e.g.

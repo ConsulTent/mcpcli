@@ -1,0 +1,45 @@
+# Replaces the unmaintained SLSA GitHub generator: we build the release
+# binaries ourselves and attest them. OIDC subject is auto-derived by GitHub
+# (repo:ConsulTent@35459345/mcpcli@1417008981), which is why plain
+# `gh attestation verify <binary> --repo ConsulTent/mcpcli` works for
+# consumers with no extra flags.
+name: release-build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {} # dress rehearsal: build+attest on GitHub; build-only under act
+
+permissions:
+  contents: write # upload release assets
+  id-token: write # mint the Sigstore signing certificate
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Build all platforms
+        run: |
+          mkdir dist
+          for platform in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS=${platform%/*}; GOARCH=${platform#*/}
+            EXT=""; [ "$GOOS" = "windows" ] && EXT=".exe"
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -o "dist/mcp-$GOOS-$GOARCH$EXT" ./cmd/mcp
+          done
+          ls -l dist/ # pass signal for act and dispatch runs
+      - uses: actions/attest@67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d # v1
+        # act cannot mint OIDC tokens (ACT is never set on GitHub runners);
+        # dispatch on GitHub attests for real - digest-keyed, publishes nothing
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && env.ACT != 'true')
+        with:
+          subject-path: dist/*
+      - run: gh release upload "$GITHUB_REF_NAME" dist/*
+        if: github.event_name == 'release' # never touch a real release from a smoke run
+        env:
+          GH_TOKEN: ${{ github.token }}
