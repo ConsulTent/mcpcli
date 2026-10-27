@@ -33,7 +33,7 @@ jobs:
             CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -o "dist/mcp-$GOOS-$GOARCH$EXT" ./cmd/mcp
           done
           ls -l dist/ # pass signal for act and dispatch runs
-      - uses: actions/attest@67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d # v1
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         # act cannot mint OIDC tokens (ACT is never set on GitHub runners);
         # dispatch on GitHub attests for real - digest-keyed, publishes nothing
         if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && env.ACT != 'true')
