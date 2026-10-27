@@ -42,6 +42,8 @@ go.work.sum
 
 # local build artifacts
 /mcp
+# release-build output dir: untracked files here would stamp +dirty into VCS build info
+dist/
 
 # Local-only agent docs (design spec, plans, upstream drafts)
 /docs/superpowers/
