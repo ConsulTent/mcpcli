@@ -8,6 +8,7 @@ interactively in a REPL.
 
 <p align="center">
   <a href="#install"><img src="https://raw.githubusercontent.com/ConsulTent/mcpcli/main/docs/badges/homebrew.svg" alt="Homebrew"></a>
+  <a href="#verifying-a-download"><img src="https://raw.githubusercontent.com/ConsulTent/mcpcli/main/docs/badges/attestations.svg" alt="Attestations"></a>
   <a href="LICENSE"><img src="https://raw.githubusercontent.com/ConsulTent/mcpcli/main/docs/badges/license.svg" alt="License"></a>
 </p>
 
