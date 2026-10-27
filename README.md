@@ -33,11 +33,24 @@ cd mcpcli
 go build -o mcp ./cmd/mcp
 ```
 
-Release binaries carry GitHub artifact attestations — verify one after
-downloading:
+### Verifying a download
+
+Release binaries carry GitHub artifact attestations. Download one and verify it
+(substitute your platform's asset — the six are `darwin-arm64`, `darwin-amd64`,
+`linux-arm64`, `linux-amd64`, `windows-amd64.exe`, `windows-arm64.exe`):
 
 ```
-gh attestation verify mcp-<os>-<arch> --repo ConsulTent/mcpcli
+gh release download v1.2.0 --repo ConsulTent/mcpcli --pattern "mcp-darwin-arm64"
+gh attestation verify mcp-darwin-arm64 --repo ConsulTent/mcpcli
+```
+
+The command exits `0` on success. To also pin that the binary was built by this
+repository's own release workflow — not just any workflow in the repo — pass the
+workflow identity:
+
+```
+gh attestation verify mcp-darwin-arm64 --repo ConsulTent/mcpcli \
+  --cert-identity "https://github.com/ConsulTent/mcpcli/.github/workflows/release-build.yml@refs/tags/v1.2.0"
 ```
 
 `go install ./cmd/mcp` from the checkout root installs into `$(go env GOPATH)/bin`
