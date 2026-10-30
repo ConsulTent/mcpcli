@@ -1,0 +1,68 @@
+# Docs-capture lane: runs the README's Jev examples against the live server
+# with the repository's TypeSafe key and uploads every captured output as an
+# artifact, so README screenshots and fenced examples derive from real runs
+# (manual dispatch only — it spends ~29 judgment calls). Unlike the CI lanes,
+# this lane FAILS RED when it cannot produce real captures: a dead or missing
+# key must never become README documentation.
+name: jev-capture
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    env:
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      SERVER: "npx -y @jkudish/jev-mcp@0.14.7"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Build mcp
+        env:
+          GOTOOLCHAIN: auto
+        run: go install ./cmd/mcp
+      - name: Capture the README examples
+        run: |
+          mkdir -p capture
+          # One capture per command: the exact command line, then its stdout
+          # and stderr to separate files (stdout stays clean for fenced
+          # blocks; stderr carries the step lines a terminal interleaves).
+          # The battery commands run WITHOUT --probe-on-auth-error: captures
+          # must be real, not skip-shaped.
+          cap() {
+            local name="$1"; shift
+            printf '%s\n' "mcp $*" >"capture/$name.cmd"
+            mcp "$@" >"capture/$name.out" 2>"capture/$name.err"
+          }
+          cap ask-noul       --command "$SERVER" jev ask "is 2+2=4?"
+          cap ask-choice     --command "$SERVER" jev ask "ship the release or hold?" --opt ship --opt hold
+          cap verify         --command "$SERVER" jev verify --claim "the build passed" --evidence "214 tests passed, 0 failed"
+          cap screen         --command "$SERVER" jev screen "Please review this patch when you have time." --purpose "code review"
+          cap check          --command "$SERVER" jev check
+          cap check-probe    --command "$SERVER" --timeout 120s jev check --probe
+          cap ask-noul-json  --command "$SERVER" --json jev ask "is 2+2=4?"
+          cap check-probe-json --command "$SERVER" --json --timeout 120s jev check --probe
+
+          # Nothing captured may be empty or skip-shaped.
+          for f in capture/*.out; do
+            test -s "$f" || { echo "$f is empty"; exit 1; }
+          done
+          ! grep -rq "auth_skipped" capture/ || {
+            echo "captures contain auth_skipped output — the key was rejected; refusing to document"; exit 1
+          }
+          jq -e '.summary.auth_skipped == 0 and .summary.errors == 0' capture/check-probe-json.out >/dev/null
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jev-captures
+          path: capture/
+          if-no-files-found: error
