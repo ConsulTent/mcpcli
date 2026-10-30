@@ -1,0 +1,73 @@
+# The mcp full ladder against one server: version, ping, info, compat,
+# tools list + call, resources, prompts. Shared by the reusable mcp-e2e
+# workflow's caller/weekly runs and the per-merge repo-built run.
+#
+# Expects mcp and jq on PATH. Every step re-establishes the workflow's
+# shell defaults because composite steps do not inherit them.
+name: "mcp e2e ladder"
+description: "Runs the full mcp command ladder against one MCP server"
+
+inputs:
+  server:
+    description: "The MCP server endpoint (streamable HTTP)"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - run: mcp --version
+      shell: bash
+    - name: ping
+      run: |
+        set -euo pipefail
+        mcp --url "$SERVER" --json --timeout 60s ping | jq -e '.ok == true'
+      shell: bash
+      env:
+        SERVER: ${{ inputs.server }}
+    - name: info
+      run: |
+        set -euo pipefail
+        mcp --url "$SERVER" --json info | jq -e '.serverInfo.name and .protocolVersion'
+      shell: bash
+      env:
+        SERVER: ${{ inputs.server }}
+    - name: compat
+      run: |
+        set -euo pipefail
+        mcp --url "$SERVER" --json compat | jq -e '.results | length > 0'
+      shell: bash
+      env:
+        SERVER: ${{ inputs.server }}
+    - name: tools list
+      run: |
+        set -euo pipefail
+        mcp --url "$SERVER" --json tools list | jq -e '.tools | length > 0'
+      shell: bash
+      env:
+        SERVER: ${{ inputs.server }}
+    - name: call a tool
+      run: |
+        set -euo pipefail
+        TOOL=$(mcp --url "$SERVER" --json tools list | jq -r '[.tools[] | select((.inputSchema.required // []) | length == 0)][0].name // empty')
+        if [ -n "$TOOL" ]; then
+          mcp --url "$SERVER" --json --timeout 60s tools call "$TOOL" >/dev/null
+        else
+          echo "no tool without required arguments; skipping call"
+        fi
+      shell: bash
+      env:
+        SERVER: ${{ inputs.server }}
+    - name: resources
+      run: |
+        set -euo pipefail
+        mcp --url "$SERVER" --json resources list >/dev/null
+      shell: bash
+      env:
+        SERVER: ${{ inputs.server }}
+    - name: prompts
+      run: |
+        set -euo pipefail
+        mcp --url "$SERVER" --json prompts list >/dev/null
+      shell: bash
+      env:
+        SERVER: ${{ inputs.server }}

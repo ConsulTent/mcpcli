@@ -325,7 +325,9 @@ The [`mcp-e2e`](https://github.com/ConsulTent/mcpcli/actions/workflows/mcp-e2e.y
 workflow in this repository is reusable. Call it from your own repository to run the
 full ladder — ping, info, protocol compat, tool discovery, a real tool call, resources,
 prompts — against your MCP server, on macOS and Linux, with `mcp` installed from the
-Homebrew tap:
+Homebrew tap (caller and scheduled runs; merges to this repository's `main` run the
+same coverage internally with an `mcp` built from the merge commit, so a regression
+fails the merge check instead of the next release):
 
 ```yaml
 # .github/workflows/mcp-e2e.yml in YOUR repository
@@ -358,8 +360,9 @@ it by passing the secret; without it the lane skips green:
 
 A rejected key (unpaid bill, rotation) never fails the workflow: the battery
 runs with `--probe-on-auth-error skip`, posts a notice, and the job stays
-green. The lane installs `mcp` ≥ v1.3.0 with `go install` and skips green on
-older installed versions.
+green. In caller and scheduled runs the lane installs `mcp` ≥ v1.3.0 with
+`go install` and skips green until that tag exists; the per-merge run builds
+`mcp` from the merge commit instead.
 
 Post the results on your README:
 
