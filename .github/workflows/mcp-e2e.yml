@@ -171,7 +171,11 @@ jobs:
     steps:
       - name: Install mcp and github-mcp-server
         run: |
-          brew install jq ConsulTent/tap/mcpcli
+          # 'go' is installed via brew: the moving ghcr.io/homebrew/brew:main
+          # image stopped bundling a Go toolchain (verified 2026-10-30 —
+          # 'go: command not found' on main's dispatch run), and this job
+          # predates that breakage only because older image builds shipped go.
+          brew install jq go ConsulTent/tap/mcpcli
           GOBIN="$(brew --prefix)/bin" go install github.com/github/github-mcp-server/v2/cmd/github-mcp-server@v2.0.3
         env:
           HOME: /home/linuxbrew
