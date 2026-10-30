@@ -70,6 +70,10 @@ func TestIsAuthError(t *testing.T) {
 		{"payment required 402", errors.New("402 Payment Required from typesafe"), true},
 		{"forbidden 403", errors.New("request failed with status 403"), true},
 		{"invalid api key phrase", errors.New("invalid API key provided"), true},
+		{"missing api key phrase", errors.New("missing API key for provider"), true},
+		// Verbatim prefix of a keyless @jkudish/jev-mcp@0.14.7 tool error
+		// (live-captured): the absent-key family must skip like a rejection.
+		{"keyless jkudish wire text", errors.New("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API..."), true},
 		{"billing phrase", errors.New("your billing account is on hold"), true},
 		{"unauthorized phrase", errors.New("user is unauthorized to access this resource"), true},
 		// Negatives: numbers embedded in larger tokens must not match.

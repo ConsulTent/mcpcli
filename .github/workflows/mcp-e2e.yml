@@ -86,8 +86,8 @@ jobs:
   # workflow_call, or this repository's own secret on schedule/dispatch runs).
   # A rejected key (unpaid bill, rotation) NEVER fails the job: the battery
   # runs with --probe-on-auth-error skip and the jq branch below posts a
-  # notice and stays green. Needs mcp >= v1.3.0 — the capability guard skips
-  # green until then.
+  # notice and stays green. Until the v1.3.0 tag exists, the install step
+  # skips the lane green the same way.
   jev:
     runs-on: ubuntu-latest
     env:
@@ -96,22 +96,27 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
-      - name: Install mcp
-        run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0
-      - name: Capability guard
-        run: |
-          mcp jev --help >/dev/null 2>&1 || {
-            echo "::notice::installed mcp lacks the jev group (needs >= v1.3.0) — skipping"
-            exit 0
-          }
-      - name: Secret guard
-        run: |
-          [ -n "${TYPESAFE_API_KEY:-}" ] || {
-            echo "::notice::TYPESAFE_API_KEY is not set — skipping the Jev battery"
-            exit 0
-          }
+      # One script on purpose: `exit 0` ends a step, not a job, so guard
+      # steps would let later steps run. Every skip path lives here, where
+      # exit 0 genuinely means "this lane is done and green".
       - name: Jev battery (one question per tool)
         run: |
+          # Pre-release window: until the v1.3.0 tag exists the lane skips
+          # green so the weekly schedule cannot go red. Only "unknown
+          # revision" skips — any other install failure fails the job.
+          if ! go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0 2>/tmp/install.log; then
+            if grep -q "unknown revision" /tmp/install.log; then
+              echo "::notice::mcp v1.3.0 is not published yet — skipping the Jev lane"
+              exit 0
+            fi
+            cat /tmp/install.log >&2
+            exit 1
+          fi
+          if [ -z "${TYPESAFE_API_KEY:-}" ]; then
+            echo "::notice::TYPESAFE_API_KEY is not set — skipping the Jev battery"
+            exit 0
+          fi
+
           mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
             jev check --probe --probe-on-auth-error skip --json --timeout 60s >jev-check.json
           # The battery document is authoritative whatever happened:
