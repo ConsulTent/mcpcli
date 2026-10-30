@@ -132,17 +132,23 @@ the primitive from the flags (`--opt` choice, `--levels` score, else noul):
 
 ```sh
 mcp --command "npx -y @jkudish/jev-mcp" --json jev ask "is the build green?" --context "$CI_LOG"
+# {"flavor":"jkudish","tool":"jev_noul","verdicts":[{"type":"noul","answer":0.99,"label":"likely"}]}
 mcp --command "jev-use serve" --json jev ask "ship or hold?" --opt ship --opt hold
 mcp --command "npx -y @jkudish/jev-mcp" --json jev verify --claim "tests pass" --evidence "$CI_LOG"
+# verdicts[].answer is verified|contradicted|unsupported|unknown; label is the action (auto|review)
 mcp --command "npx -y @jkudish/jev-mcp" --json jev check   # flavor + support matrix
 ```
+(answers above are the live model's; they vary per call)
 
 Self-test a Jev server (one minimal question per tool, per-probe timeouts;
-skip-on-auth keeps a dead provider key from failing CI):
+skip-on-auth keeps a dead provider key from failing CI). Real capture,
+2026-10-30, live jkudish server:
 
 ```sh
 mcp --command "npx -y @jkudish/jev-mcp" --json jev check --probe --probe-on-auth-error skip --timeout 60s
-# {"flavor":"jkudish","matched":[...],"ops":[...],"probes":[{"tool":"jev_noul","status":"ok",...}],
+# {"flavor":"jkudish","matched":["jev_verify","jev_screen","jev_noul",...],
+#  "ops":[{"op":"noul","via":"jev_noul","ok":true},{"op":"score","ok":false,"note":"no ordered-levels tool; ..."},...],
+#  "probes":[{"tool":"jev_noul","status":"ok"},...],
 #  "summary":{"ok":12,"escalate":0,"skipped":0,"auth_skipped":0,"errors":0}}
 # summary gate for scripts: jq -e '.summary.auth_skipped == 0 and .summary.errors == 0'
 ```
