@@ -75,17 +75,35 @@ jobs:
           # the runner injects an unwritable HOME=/github/home into container steps;
           # step env wins over the runner default — restore each platform's real home
           HOME: ${{ matrix.os == 'ubuntu-latest' && '/home/linuxbrew' || '/Users/runner' }}
-      - uses: ./.github/actions/ladder
-        with:
-          server: ${{ env.SRV }}
+      - run: mcp --version
+      - name: ping
+        run: mcp --url "$SRV" --json --timeout 60s ping | jq -e '.ok == true'
+      - name: info
+        run: mcp --url "$SRV" --json info | jq -e '.serverInfo.name and .protocolVersion'
+      - name: compat
+        run: mcp --url "$SRV" --json compat | jq -e '.results | length > 0'
+      - name: tools list
+        run: mcp --url "$SRV" --json tools list | jq -e '.tools | length > 0'
+      - name: call a tool
+        run: |
+          TOOL=$(mcp --url "$SRV" --json tools list | jq -r '[.tools[] | select((.inputSchema.required // []) | length == 0)][0].name // empty')
+          if [ -n "$TOOL" ]; then
+            mcp --url "$SRV" --json --timeout 60s tools call "$TOOL" >/dev/null
+          else
+            echo "no tool without required arguments; skipping call"
+          fi
+      - name: resources
+        run: mcp --url "$SRV" --json resources list >/dev/null
+      - name: prompts
+        run: mcp --url "$SRV" --json prompts list >/dev/null
 
-  # Optional target: the Jev judgment battery against a live provider key.
+  # Optional third target: the Jev judgment battery against a live provider key.
   # Runs only when the TYPESAFE_API_KEY secret is present (caller-passed via
   # workflow_call, or this repository's own secret on schedule/dispatch runs).
   # A rejected key (unpaid bill, rotation) NEVER fails the job: the battery
-  # action runs with --probe-on-auth-error skip and posts a notice, and until
-  # the v1.3.0 tag exists its release-mode install skips the lane green the
-  # same way. The push-to-main variant (mcp built from the merge commit)
+  # runs with --probe-on-auth-error skip and the jq branch below posts a
+  # notice and stays green. Until the v1.3.0 tag exists, the install step
+  # skips the lane green the same way. The push-to-main variant of this lane
   # lives in e2e-main below.
   jev:
     if: github.event_name != 'push'
@@ -96,7 +114,48 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
-      - uses: ./.github/actions/jev-battery
+      # One script on purpose: `exit 0` ends a step, not a job, so guard
+      # steps would let later steps run. Every skip path lives here, where
+      # exit 0 genuinely means "this lane is done and green".
+      - name: Jev battery (one question per tool)
+        run: |
+          # Pre-release window: until the v1.3.0 tag exists the lane skips
+          # green so the weekly schedule cannot go red. The grep is pinned to
+          # mcp itself ("cmd/mcp@v1.3.0: invalid version: unknown revision")
+          # so a post-release dependency resolution failure — which shares
+          # the "unknown revision" wording — fails red instead of skipping
+          # green. If go's wording ever drifts, the lane goes red: visible,
+          # the safe direction for a monitor. Any other install failure
+          # fails the job.
+          if ! go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0 2>/tmp/install.log; then
+            if grep -q "cmd/mcp@v1.3.0: invalid version: unknown revision" /tmp/install.log; then
+              grep "unknown revision" /tmp/install.log >&2
+              echo "::notice::mcp v1.3.0 is not published yet — skipping the Jev lane"
+              exit 0
+            fi
+            cat /tmp/install.log >&2
+            exit 1
+          fi
+          if [ -z "${TYPESAFE_API_KEY:-}" ]; then
+            echo "::notice::TYPESAFE_API_KEY is not set — skipping the Jev battery"
+            exit 0
+          fi
+
+          mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+            jev check --probe --probe-on-auth-error skip --json --timeout 60s >jev-check.json
+          # The battery document is authoritative whatever happened:
+          # the five summary counts must always sum to the probe rows.
+          jq -e '((.summary.ok // 0) + (.summary.escalate // 0) + (.summary.skipped // 0)
+                  + (.summary.auth_skipped // 0) + (.summary.errors // 0)) == (.probes | length)' \
+            jev-check.json >/dev/null
+          if jq -e '.summary.auth_skipped > 0' jev-check.json >/dev/null; then
+            echo "::notice::Jev provider key rejected (auth/billing) — battery skipped, job green"
+          elif ! jq -e '.summary.errors == 0' jev-check.json >/dev/null; then
+            echo "battery reported tool errors"; exit 1
+          else
+            mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+              jev ask "is 2+2=4?" --json --timeout 60s | jq -e '.verdicts | length == 1'
+          fi
 
   # Second target: github-mcp-server over stdio — proves mcp's stdio transport and
   # token-authenticated server against a real, stateful MCP server. Uses the job's
@@ -135,7 +194,12 @@ jobs:
   # Per-merge self-test (push to main only): the same coverage as the jobs
   # above, but with mcp built from the merge commit — so a regression in a
   # merged PR fails here, immediately, instead of waiting for the weekly
-  # schedule or the next release.
+  # schedule or the next release. Steps are inlined (not shared with the
+  # jobs above via local composite actions) because a reusable workflow's
+  # `./` references resolve against the CALLER's workspace — callers do not
+  # have this repository's actions — so inline is the only form that works
+  # for both callers and this job. Keep the ladder, stdio smoke and battery
+  # in sync with the jobs above.
   e2e-main:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -156,9 +220,28 @@ jobs:
         run: |
           go install ./cmd/mcp
           go install github.com/github/github-mcp-server/v2/cmd/github-mcp-server@v2.0.3
-      - uses: ./.github/actions/ladder
-        with:
-          server: https://mcp.svelte.dev/mcp
+      - run: mcp --version
+      - name: ping
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json --timeout 60s ping | jq -e '.ok == true'
+      - name: info
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json info | jq -e '.serverInfo.name and .protocolVersion'
+      - name: compat
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json compat | jq -e '.results | length > 0'
+      - name: tools list
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json tools list | jq -e '.tools | length > 0'
+      - name: call a tool
+        run: |
+          SRV="https://mcp.svelte.dev/mcp"
+          TOOL=$(mcp --url "$SRV" --json tools list | jq -r '[.tools[] | select((.inputSchema.required // []) | length == 0)][0].name // empty')
+          if [ -n "$TOOL" ]; then
+            mcp --url "$SRV" --json --timeout 60s tools call "$TOOL" >/dev/null
+          else
+            echo "no tool without required arguments; skipping call"
+          fi
+      - name: resources
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json resources list >/dev/null
+      - name: prompts
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json prompts list >/dev/null
       # stdio smoke: keep these three steps in sync with the
       # github-mcp-server job above.
       - name: info (stdio)
@@ -171,6 +254,26 @@ jobs:
             --arg owner="${GITHUB_REPOSITORY_OWNER}" \
             --arg repo="${GITHUB_REPOSITORY#*/}" \
             --arg path=README.md | jq -e 'has("content") or has("text")'
-      - uses: ./.github/actions/jev-battery
-        with:
-          install: preinstalled
+      # Jev battery, repo-built mcp: same script as the jev job above minus
+      # the release install (mcp is already on PATH from this checkout).
+      # Keep in sync with the jev job.
+      - name: Jev battery (one question per tool)
+        run: |
+          if [ -z "${TYPESAFE_API_KEY:-}" ]; then
+            echo "::notice::TYPESAFE_API_KEY is not set — skipping the Jev battery"
+            exit 0
+          fi
+
+          mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+            jev check --probe --probe-on-auth-error skip --json --timeout 60s >jev-check.json
+          jq -e '((.summary.ok // 0) + (.summary.escalate // 0) + (.summary.skipped // 0)
+                  + (.summary.auth_skipped // 0) + (.summary.errors // 0)) == (.probes | length)' \
+            jev-check.json >/dev/null
+          if jq -e '.summary.auth_skipped > 0' jev-check.json >/dev/null; then
+            echo "::notice::Jev provider key rejected (auth/billing) — battery skipped, job green"
+          elif ! jq -e '.summary.errors == 0' jev-check.json >/dev/null; then
+            echo "battery reported tool errors"; exit 1
+          else
+            mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+              jev ask "is 2+2=4?" --json --timeout 60s | jq -e '.verdicts | length == 1'
+          fi
