@@ -127,11 +127,24 @@ type Verdict struct {
 	Escalate      bool               `json:"escalate,omitempty"`
 }
 
-// authPhrases are the non-numeric markers of a provider rejecting its key.
-// The list is intentionally SEPARATE from connection's connect-time
-// unauthorized heuristic (internal/connection): 402/billing wording is right
-// here (provider billing) but would wrongly widen the connect retry hint.
-var authPhrases = []string{"unauthorized", "invalid api key", "payment required", "billing"}
+// authPhrases are the non-numeric markers of a provider rejecting — or not
+// being configured with — its key. The absent-key family ("no api key",
+// "no typesafe_api_key") is verified against a keyless
+// @jkudish/jev-mcp@0.14.7: its tool error begins
+// "No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), …". The list is
+// intentionally SEPARATE from connection's connect-time unauthorized
+// heuristic (internal/connection): 402/billing wording is right here
+// (provider billing) but would wrongly widen the connect retry hint.
+var authPhrases = []string{
+	"unauthorized",
+	"invalid api key",
+	"missing api key",
+	"no api key",
+	"api key is not set",
+	"no typesafe_api_key",
+	"payment required",
+	"billing",
+}
 
 // authCodes are the HTTP status codes a provider rejection surfaces as.
 var authCodes = []string{"401", "402", "403"}

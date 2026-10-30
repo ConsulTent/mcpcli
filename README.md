@@ -309,11 +309,11 @@ PATH; the legostin browser-automation server is detect-and-doctor only.
 `jev_gate` on jev-use, the `jev_doctor` self-test on legostin — each under
 its own `--timeout` window. Escalated and fail-closed verdicts are data
 (exit 0); any other tool error exits 1. With `--probe-on-auth-error skip`,
-a rejected provider key (HTTP 401/402/403, "invalid api key", payment or
-billing wording — a text heuristic, so only recognized auth-class errors
-skip) aborts the battery, marks the remaining probes `skipped (auth)`, warns
-on stderr, and exits 0: the CI posture, where an unpaid bill must not be a
-red build.
+a rejected or missing provider key (HTTP 401/402/403, "invalid/missing/no
+api key", payment or billing wording — a text heuristic, so only recognized
+auth-class errors skip) aborts the battery, marks the remaining probes
+`skipped (auth)`, warns on stderr, and exits 0: the CI posture, where an
+unpaid bill must not be a red build.
 
 Ready-made code-quality workflows — pure-LLM PR review, Jev-only PR review,
 and a hybrid where Jev screens and the LLM only reviews what Jev flags —
@@ -461,11 +461,11 @@ when the provider rejects its key — the skipped battery is reported as data (s
 - Jev: no REPL command (the REPL splits input on whitespace, so free-text
   questions cannot reach it); legostin is detect-and-doctor only (its tools
   drive Chrome and publish no schemas); the auth-class skip is a text
-  heuristic — only recognized rejections (401/402/403 token-bounded,
-  "invalid api key", payment/billing wording) skip, everything else still
-  fails; `jev gate --input` on the command line is visible in process
-  listings like any argument — use `--input -` (stdin) for sensitive tool
-  arguments.
+  heuristic — only recognized rejections/absences (401/402/403 token-bounded,
+  "invalid/missing/no api key", payment/billing wording) skip, everything
+  else still fails; `jev gate --input` on the command line is visible in
+  process listings like any argument — use `--input -` (stdin) for sensitive
+  tool arguments.
 
 ## License
 
