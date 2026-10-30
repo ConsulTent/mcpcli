@@ -67,6 +67,16 @@ func TestJkudishBuild(t *testing.T) {
 			t.Fatal("auto_accept present without HasThreshold, want omitted")
 		}
 	})
+	// Pinned 2026-10-30 against the live server: jev_decide validates
+	// evidence and priorities as non-empty strings, so a choice without
+	// them must fail at Build — one honest error, not a server-side tool
+	// error a round trip later.
+	t.Run("choice without evidence and priorities errors at Build", func(t *testing.T) {
+		_, _, err := a.Build(OpKindChoice, Question{Text: "next?", Options: []string{"a", "b"}})
+		if err == nil || !strings.Contains(err.Error(), "requires --evidence and --priorities") {
+			t.Fatalf("err = %v, want the missing-flag error", err)
+		}
+	})
 	t.Run("choice builds ordered candidates", func(t *testing.T) {
 		_, args, err := a.Build(OpKindChoice, Question{Text: "next?", Options: []string{"a", "b"}, Evidence: []string{"e1", "e2"}, Priorities: "speed"})
 		if err != nil {

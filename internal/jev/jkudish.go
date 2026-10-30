@@ -146,6 +146,13 @@ func (a jkudish) Build(op OpKind, q Question) (string, map[string]any, error) {
 		if len(q.Options) < 2 || len(q.Options) > 6 {
 			return "", nil, opError(op, "jev_decide takes 2-6 candidates, got %d", len(q.Options))
 		}
+		// The live server validates evidence and priorities as non-empty
+		// strings (captured 2026-10-30: "expected string to have >=1
+		// characters"), so omitting the flags must fail here, at Build,
+		// instead of as a server-side tool error one round trip later.
+		if len(q.Evidence) == 0 || q.Priorities == "" {
+			return "", nil, opError(op, "a choice on the jkudish flavor requires --evidence and --priorities (jev_decide validates both as non-empty)")
+		}
 		candidates := make([]map[string]any, len(q.Options))
 		for i, label := range q.Options {
 			candidates[i] = map[string]any{"id": label, "description": label}

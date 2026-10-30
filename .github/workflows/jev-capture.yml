@@ -45,7 +45,8 @@ jobs:
             mcp "$@" >"capture/$name.out" 2>"capture/$name.err"
           }
           cap ask-noul       --command "$SERVER" jev ask "is 2+2=4?"
-          cap ask-choice     --command "$SERVER" jev ask "ship the release or hold?" --opt ship --opt hold
+          cap ask-choice     --command "$SERVER" jev ask "ship the release or hold?" --opt ship --opt hold \
+            --evidence "the release candidate passed its checks" --priorities "ship confidently when green"
           cap verify         --command "$SERVER" jev verify --claim "the build passed" --evidence "214 tests passed, 0 failed"
           cap screen         --command "$SERVER" jev screen "Please review this patch when you have time." --purpose "code review"
           cap check          --command "$SERVER" jev check
