@@ -17,6 +17,13 @@ on:
         description: "Your MCP server endpoint (streamable HTTP)"
         type: string
         required: true
+    secrets:
+      # Optional: enables the jev job's live battery. Callers pass their own:
+      #   secrets:
+      #     TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      TYPESAFE_API_KEY:
+        description: "TypeSafe API key for the jev battery (optional)"
+        required: false
   workflow_dispatch:
     inputs:
       server:
@@ -73,6 +80,53 @@ jobs:
         run: mcp --url "$SRV" --json resources list >/dev/null
       - name: prompts
         run: mcp --url "$SRV" --json prompts list >/dev/null
+
+  # Optional third target: the Jev judgment battery against a live provider key.
+  # Runs only when the TYPESAFE_API_KEY secret is present (caller-passed via
+  # workflow_call, or this repository's own secret on schedule/dispatch runs).
+  # A rejected key (unpaid bill, rotation) NEVER fails the job: the battery
+  # runs with --probe-on-auth-error skip and the jq branch below posts a
+  # notice and stays green. Needs mcp >= v1.3.0 — the capability guard skips
+  # green until then.
+  jev:
+    runs-on: ubuntu-latest
+    env:
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+    steps:
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+      - name: Install mcp
+        run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0
+      - name: Capability guard
+        run: |
+          mcp jev --help >/dev/null 2>&1 || {
+            echo "::notice::installed mcp lacks the jev group (needs >= v1.3.0) — skipping"
+            exit 0
+          }
+      - name: Secret guard
+        run: |
+          [ -n "${TYPESAFE_API_KEY:-}" ] || {
+            echo "::notice::TYPESAFE_API_KEY is not set — skipping the Jev battery"
+            exit 0
+          }
+      - name: Jev battery (one question per tool)
+        run: |
+          mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+            jev check --probe --probe-on-auth-error skip --json --timeout 60s >jev-check.json
+          # The battery document is authoritative whatever happened:
+          # the five summary counts must always sum to the probe rows.
+          jq -e '((.summary.ok // 0) + (.summary.escalate // 0) + (.summary.skipped // 0)
+                  + (.summary.auth_skipped // 0) + (.summary.errors // 0)) == (.probes | length)' \
+            jev-check.json >/dev/null
+          if jq -e '.summary.auth_skipped > 0' jev-check.json >/dev/null; then
+            echo "::notice::Jev provider key rejected (auth/billing) — battery skipped, job green"
+          elif ! jq -e '.summary.errors == 0' jev-check.json >/dev/null; then
+            echo "battery reported tool errors"; exit 1
+          else
+            mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+              jev ask "is 2+2=4?" --json --timeout 60s | jq -e '.verdicts | length == 1'
+          fi
 
   # Second target: github-mcp-server over stdio — proves mcp's stdio transport and
   # token-authenticated server against a real, stateful MCP server. Uses the job's

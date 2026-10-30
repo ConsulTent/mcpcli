@@ -71,6 +71,22 @@ func (o OpKind) MarshalJSON() ([]byte, error) {
 	return json.Marshal(o.String())
 }
 
+// UnmarshalJSON reads the primitive name back, so the canonical document
+// round-trips; an unknown name is an error, never a silent zero value.
+func (o *OpKind) UnmarshalJSON(b []byte) error {
+	var name string
+	if err := json.Unmarshal(b, &name); err != nil {
+		return err
+	}
+	for _, op := range []OpKind{OpKindNoul, OpKindChoice, OpKindScore, OpKindVerify, OpKindScreen, OpKindGate} {
+		if op.String() == name {
+			*o = op
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown jev op %q", name)
+}
+
 // Question is one canonical ask. Build maps it onto a flavor's tool call;
 // fields the target op or flavor does not carry are the caller's business
 // (the CLI warns before dropping them).

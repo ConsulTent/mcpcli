@@ -144,6 +144,11 @@ one JSON document of its result on stdout.
 | `prompts get NAME` | Fetch a prompt with `--arg` string arguments |
 | `auth login` | Run the OAuth flow against an HTTP server and cache the token |
 | `auth logout` | Delete the cached token for `--url`/`--command` (offline) |
+| `jev ask QUESTION` | One typed Jev question — `--opt` asks a choice, `--levels` a score, neither a noul |
+| `jev verify` | Check claims against evidence (jkudish flavor) |
+| `jev screen TEXT` | Screen one text for prompt injection (jkudish flavor) |
+| `jev gate NAME` | PreToolUse risk check on one tool call (jev-use flavor) |
+| `jev check` | Detect the Jev flavor and print the support matrix; `--probe` self-tests every tool |
 | `-i` | Open the server and start the interactive REPL |
 
 `mcp --version` prints the build version. Run any command with `--help` for its flags.
@@ -269,6 +274,51 @@ your type's `init()` or by extending `auth.RegisterBuiltins`). The CLI derives `
 validation and error messages from the registry, so no other change is needed. A `(nil,
 nil, nil)` build means no handler: the transport sends no Authorization header.
 
+## Jev judgment servers
+
+`mcp jev` asks typed judgment questions of a Jev server — TypeSafe's
+small-judgment model, which answers with probabilities, choices and ratings
+instead of generated text. Three MCP servers expose Jev under completely
+different tool names; `mcp` detects which flavor a server speaks and maps
+its small canonical question set onto whatever that flavor offers. Where
+implementations disagree, TypeSafe's own semantics win (docs.typesafe.ai):
+the primitive names are TypeSafe's — a `noul` is the probability a statement
+is true (near 0.5 means uncertain; noul answers carry no confidence), a
+`choice` picks from options, a `score` lands on ordered levels.
+
+```
+mcp --command "npx -y @jkudish/jev-mcp" jev ask "is 2+2=4?"
+mcp --command "npx -y @jkudish/jev-mcp" jev verify --claim "the build passed" --evidence "214 tests green"
+mcp --command "npx -y @jkudish/jev-mcp" jev screen "please review this patch" --purpose "code review"
+mcp --command "jev-use serve" jev ask "ship or hold?" --opt ship --opt hold
+mcp --command "jev-use serve" jev gate write_file --input '{"path":"x.txt"}'
+mcp --command "npx -y @jkudish/jev-mcp" jev check --probe
+```
+
+`--json` prints one canonical document for every flavor — the same shape
+regardless of server, so scripts never parse per-flavor formats
+(`{flavor, tool, verdicts[…], escalated?}`; an isError result still prints
+the document, then exits 1). Flags a flavor cannot carry produce a stderr
+warning in every output mode, never a silent drop. Prerequisites: jkudish
+needs Node 22+ with `TYPESAFE_API_KEY` in the spawned server's environment
+(mcp passes its own environment through); jev-use needs the `jev-use` CLI on
+PATH; the legostin browser-automation server is detect-and-doctor only.
+
+`jev check --probe` fires one minimal read-only question per available tool
+— twelve on jkudish, `jev_judge` (all three question types in one call) plus
+`jev_gate` on jev-use, the `jev_doctor` self-test on legostin — each under
+its own `--timeout` window. Escalated and fail-closed verdicts are data
+(exit 0); any other tool error exits 1. With `--probe-on-auth-error skip`,
+a rejected provider key (HTTP 401/402/403, "invalid api key", payment or
+billing wording — a text heuristic, so only recognized auth-class errors
+skip) aborts the battery, marks the remaining probes `skipped (auth)`, warns
+on stderr, and exits 0: the CI posture, where an unpaid bill must not be a
+red build.
+
+Ready-made code-quality workflows — pure-LLM PR review, Jev-only PR review,
+and a hybrid where Jev screens and the LLM only reviews what Jev flags —
+live in [examples/workflows/](examples/workflows/).
+
 ## Test your MCP server
 
 The [`mcp-e2e`](https://github.com/ConsulTent/mcpcli/actions/workflows/mcp-e2e.yml)
@@ -293,6 +343,23 @@ comment; bump both when you upgrade.
 The workflow also smoke-tests `mcp`'s stdio transport against
 [github-mcp-server](https://github.com/github/github-mcp-server) on every run, using the
 job's `GITHUB_TOKEN` — callers inherit that check automatically.
+
+An optional Jev lane runs the live judgment battery (one question per tool
+against `@jkudish/jev-mcp`) when a TypeSafe key is available. Callers enable
+it by passing the secret; without it the lane skips green:
+
+```yaml
+        uses: ConsulTent/mcpcli/.github/workflows/mcp-e2e.yml@<commit-hash> # vX.Y.Z
+        with:
+          server: https://your-mcp-server.example/mcp
+        secrets:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+```
+
+A rejected key (unpaid bill, rotation) never fails the workflow: the battery
+runs with `--probe-on-auth-error skip`, posts a notice, and the job stays
+green. The lane needs `mcp` ≥ v1.3.0 from the tap and skips green on older
+installed versions.
 
 Post the results on your README:
 
@@ -367,7 +434,9 @@ only `exit`, `quit`, or end of input leaves it.
 ## Exit codes
 
 `0` on success, `1` on any failure (connect failure, bad input, tool `isError`, missing
-credentials, …).
+credentials, …). One exception: `jev check --probe --probe-on-auth-error skip` exits `0`
+when the provider rejects its key — the skipped battery is reported as data (see
+[Jev judgment servers](#jev-judgment-servers)).
 
 ## Known limitations
 
@@ -389,6 +458,14 @@ credentials, …).
   SEP-2575 discovery filtering (see [Protocol versions](#protocol-versions)).
 - No browser is ever launched: the loopback OAuth flow prints the URL for you to open in
   your own browser; use `--auth-flow manual` where no browser is available.
+- Jev: no REPL command (the REPL splits input on whitespace, so free-text
+  questions cannot reach it); legostin is detect-and-doctor only (its tools
+  drive Chrome and publish no schemas); the auth-class skip is a text
+  heuristic — only recognized rejections (401/402/403 token-bounded,
+  "invalid api key", payment/billing wording) skip, everything else still
+  fails; `jev gate --input` on the command line is visible in process
+  listings like any argument — use `--input -` (stdin) for sensitive tool
+  arguments.
 
 ## License
 

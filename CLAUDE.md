@@ -30,6 +30,7 @@ The flow runs `cmd/mcp/main.go` → `internal/cli` (cobra tree) → `runWithConn
 - **`runWithConnection`** is the one path to a server. It enforces exactly one of `--command`/`--url` before any network access. One `--timeout` window covers the OAuth wait, the connect and `fn`. Errors propagate unchanged, and any error becomes exit 1.
 - **Commands that call `connection.Open` directly:**
   - `compat` opens its own pinned, always-unauthenticated probe sessions.
+  - `jev check` opens one auth-honoring session and carves per-probe `--timeout` windows from the command context (the battery's state machine — statuses `ok|escalate|skipped|auth_skipped|error`, summary counts that always sum to the row count, doc-before-exit — is pinned in `internal/cli/jev_test.go`).
   - `auth login` forces the `oauth` provider and pings.
   - `auth logout` is strictly offline and never connects.
 - **REPL (`-i`)** runs inside `runWithConnection`, but it uses `context.WithoutCancel` so the session can outlive the connect window. Each REPL line gets its own `--timeout` window.
@@ -49,6 +50,15 @@ The flow runs `cmd/mcp/main.go` → `internal/cli` (cobra tree) → `runWithConn
 - OAuth must never launch a browser. It either prints the URL and waits on a `127.0.0.1` loopback receiver, or uses `--auth-flow manual` to read a pasted code from stdin.
 - Tokens are cached in `TokenDir/tokens.json`, keyed by SHA-256 of the target string.
 
+### Jev is an adapter slice, not a registry
+
+`internal/jev` maps one canonical question model (TypeSafe primitives: `OpKindNoul/Choice/Score` + `Verify/Screen/Gate`) onto the known Jev MCP servers — they share no tool naming, and `jev_gate` means different things on different flavors, so ops map by semantics. `var flavors = []Adapter{jkudish{}, jevUse{}, legostin{}}` + `AdapterFor(tools)` (first Detect hit wins; auth needs runtime lookup by name, jev does not — that is why there is no Register here).
+
+- To add a flavor, write one new file implementing `Adapter` (`Name`, `Detect`, `Vocabulary`, `Supports`, `Build`, `Parse`, `Probes`) and add it to the slice; no CLI change.
+- `Parse` is the single type-enforcement point for untrusted tool-result JSON: per-op `Answer` typing, required-shape checks, `StructuredContent`-else-text precedence. A nil or wrong-typed answer is a parse error, never a downstream panic.
+- `IsAuthError` matches provider rejections by text (token-bounded 401/402/403, "invalid api key", payment/billing); its pattern list is deliberately separate from `connection`'s connect-time heuristic — cross-referenced by comment, not shared.
+- The canonical `--json` document (`{flavor, tool, verdicts, escalated?}`) is the merge contract: one shape for every flavor; raw per-flavor output stays reachable via `tools call`.
+
 ### Output contract
 
 - Results go to stdout. Decoration (steps, spinners, status lines) goes to stderr.
@@ -64,10 +74,11 @@ The flow runs `cmd/mcp/main.go` → `internal/cli` (cobra tree) → `runWithConn
 
 ## Testing conventions
 
-- **No test seams for transports.** HTTP tests use `httptest` with `mcp.NewStreamableHTTPHandler` wrapped around an in-process `*mcp.Server` (`newTestMCPServer` in `internal/cli/run_test.go`). stdio tests use the `TestHelperProcess` subprocess idiom in `internal/connection/connection_test.go`. OAuth tests use `httptest` fake authorization servers.
+- **No test seams for transports.** HTTP tests use `httptest` with `mcp.NewStreamableHTTPHandler` wrapped around an in-process `*mcp.Server` (`newTestMCPServer` in `internal/cli/run_test.go`). stdio tests use the `TestHelperProcess` subprocess idiom in `internal/connection/connection_test.go`. OAuth tests use `httptest` fake authorization servers. Jev tests use fixture servers registering each flavor's tools with canned results (`addJkudishFixture`/`addJevUseFixture`/`addLegostinFixture` in `internal/cli/jev_test.go`), including auth-rejecting variants in both error shapes (CallTool error and isError result).
 - CLI end-to-end tests go through `runRoot(t, args...)`, which captures stdout, stderr and ui decoration.
 - **Don't use `t.Parallel()` in `cli`, `ui` or `auth` tests.** `ui.Current`, the spinner writer (`ui.SetSpinnerOutput`) and `auth.TokenDir` are package globals. Tests point `auth.TokenDir` at `t.TempDir()` and restore it afterward.
 - Credentials in tests are dummies derived per test and set with `t.Setenv`. Never put a usable-looking credential literal in source, examples or tests.
+- Pre-connect validation errors are golden strings pinned by tests (`TestJevArgumentErrors`); when a message changes, change its test in the same commit. `examples/workflows/` must stay actionlint-clean — ci.yml's `examples` job enforces it.
 
 ## Repo conventions
 

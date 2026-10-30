@@ -464,7 +464,7 @@ func TestJevVerifyScreenGateE2E(t *testing.T) {
 		if _, err := w.WriteString(`{"path":"x.txt"}`); err != nil {
 			t.Fatalf("write pipe: %v", err)
 		}
-		w.Close()
+		_ = w.Close()
 		oldStdin := os.Stdin
 		os.Stdin = r
 		defer func() { os.Stdin = oldStdin }()

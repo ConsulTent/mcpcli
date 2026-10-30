@@ -379,7 +379,7 @@ func runJevOp(ctx context.Context, session *mcp.ClientSession, cmd *cobra.Comman
 		return fmt.Errorf("no known Jev flavor detected (jev tools present: %s)", strings.Join(toolNames, ", "))
 	}
 	for _, warning := range droppedFlagWarnings(adapter.Name(), op, setFlags) {
-		fmt.Fprintln(errOut, warning)
+		_, _ = fmt.Fprintln(errOut, warning)
 	}
 	sup := adapter.Supports(op)
 	if !sup.Supported {
@@ -404,7 +404,7 @@ func runJevOp(ctx context.Context, session *mcp.ClientSession, cmd *cobra.Comman
 				return err
 			}
 		} else {
-			fmt.Fprintln(errOut, doc.Error)
+			_, _ = fmt.Fprintln(errOut, doc.Error)
 		}
 		return format.ErrToolError
 	}
@@ -610,7 +610,7 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 	if err != nil {
 		return res, err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	tools, err := session.ListTools(cctx, nil)
 	if err != nil {
@@ -670,7 +670,7 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 				if authAbort {
 					abortDetail = "auth-class error"
 					if skipOnAuth {
-						fmt.Fprintln(cmd.ErrOrStderr(), "warning: provider key rejected (auth/billing) — probes skipped")
+						_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: provider key rejected (auth/billing) — probes skipped")
 					}
 				} else {
 					abortDetail = "error"
