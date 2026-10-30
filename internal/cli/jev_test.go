@@ -274,20 +274,25 @@ func TestJevAskNoulE2E(t *testing.T) {
 }
 
 // TestJevAskChoiceE2E pins the choice inference (--opt) on both flavors.
+// The jkudish row carries --evidence/--priorities: the live server validates
+// both as non-empty (captured 2026-10-30), and the Build-time error without
+// them is pinned by the case after the table.
 func TestJevAskChoiceE2E(t *testing.T) {
 	tests := []struct {
 		flavor string
 		build  func(*mcp.Server)
 		tool   string
 		want   string
+		extra  []string
 	}{
-		{"jkudish", func(s *mcp.Server) { addJkudishFixture(s, nil) }, "jev_decide", "thank"},
-		{"jev-use", func(s *mcp.Server) { addJevUseFixture(s, nil, false) }, "jev_judge", "merge"},
+		{"jkudish", func(s *mcp.Server) { addJkudishFixture(s, nil) }, "jev_decide", "thank", []string{"--evidence", "the comment says thanks", "--priorities", "be concise"}},
+		{"jev-use", func(s *mcp.Server) { addJevUseFixture(s, nil, false) }, "jev_judge", "merge", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.flavor, func(t *testing.T) {
 			srv := newTestMCPServerWithTools(t, tt.build)
-			stdout, _, _, err := runRoot(t, "--url", srv.URL, "--json", "jev", "ask", "next?", "--opt", "a", "--opt", "b")
+			args := slices.Concat([]string{"--url", srv.URL, "--json", "jev", "ask", "next?", "--opt", "a", "--opt", "b"}, tt.extra)
+			stdout, _, _, err := runRoot(t, args...)
 			if err != nil {
 				t.Fatalf("ask: %v", err)
 			}
@@ -300,6 +305,13 @@ func TestJevAskChoiceE2E(t *testing.T) {
 			}
 		})
 	}
+	t.Run("jkudish choice without evidence and priorities errors", func(t *testing.T) {
+		srv := newTestMCPServerWithTools(t, func(s *mcp.Server) { addJkudishFixture(s, nil) })
+		_, _, _, err := runRoot(t, "--url", srv.URL, "jev", "ask", "next?", "--opt", "a", "--opt", "b")
+		if err == nil || !strings.Contains(err.Error(), "requires --evidence and --priorities") {
+			t.Fatalf("err = %v, want the missing-flag error", err)
+		}
+	})
 }
 
 // TestJevAskScoreE2E pins the score inference (--levels) on jev-use, and the
