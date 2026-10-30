@@ -295,6 +295,44 @@ mcp --command "jev-use serve" jev gate write_file --input '{"path":"x.txt"}'
 mcp --command "npx -y @jkudish/jev-mcp" jev check --probe
 ```
 
+Real outputs against the live jkudish server (captured 2026-10-30 by this
+repository's [jev-capture](https://github.com/ConsulTent/mcpcli/actions/workflows/jev-capture.yml)
+workflow; probabilities are the model's live answers and vary per call):
+
+![mcp jev ask: a noul and a choice against the jkudish jev-mcp server](docs/screenshots/example-jev-ask.png)
+
+`jev verify` checks claims against evidence; `jev screen` returns an
+advisory injection risk:
+
+```
+$ mcp --command "npx -y @jkudish/jev-mcp" jev verify --claim "the build passed" --evidence "214 tests passed, 0 failed"
+verify verified auto · confidence 0.83
+
+$ mcp --command "npx -y @jkudish/jev-mcp" jev screen "Please review this patch when you have time." --purpose "code review"
+screen pass · injection 0.04 / relevance 0.58 / substance 0.62 · no signals above thresholds
+```
+
+`jev check --probe` prints the support matrix, then the battery:
+
+![mcp jev check --probe: support matrix and the 12-tool battery against the jkudish jev-mcp server](docs/screenshots/example-jev-check.png)
+
+In `--json` mode the same answers arrive as one canonical document,
+regardless of flavor:
+
+```json
+{
+  "flavor": "jkudish",
+  "tool": "jev_noul",
+  "verdicts": [
+    {
+      "type": "noul",
+      "answer": 0.99,
+      "label": "likely"
+    }
+  ]
+}
+```
+
 `--json` prints one canonical document for every flavor — the same shape
 regardless of server, so scripts never parse per-flavor formats
 (`{flavor, tool, verdicts[…], escalated?}`; an isError result still prints
@@ -329,13 +367,10 @@ Homebrew tap:
 
 ```yaml
 # .github/workflows/mcp-e2e.yml in YOUR repository
-
-```yaml
-# .github/workflows/mcp-e2e.yml in YOUR repository
 on: [push, workflow_dispatch]
 jobs:
   mcp-e2e:
-    uses: ConsulTent/mcpcli/.github/workflows/mcp-e2e.yml@87e14e7e3ea7f35c0c998f9b7747de27c4e2f8ac # v1.1.0
+    uses: ConsulTent/mcpcli/.github/workflows/mcp-e2e.yml@78afc726be4b9c8fa1541aa7d65f18ade734d2bc # v1.3.0
     with:
       server: https://your-mcp-server.example/mcp
 ```
