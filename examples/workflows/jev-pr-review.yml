@@ -1,0 +1,90 @@
+# Jev-only PR review with the mcp CLI.
+#
+# Copy this file into YOUR repository as .github/workflows/jev-pr-review.yml
+# and set the TYPESAFE_API_KEY secret (https://console.typesafe.ai). Every
+# pull request diff is scored by jev_review — TypeSafe's judgment model —
+# and the review comment branches on its action:
+#
+#   auto     rubric scores + safe_to_apply; no further machinery
+#   review   rubric scores + reason codes; a human should look
+#   escalate same, flagged; the rubrics that limited the score are named
+#
+# A dead or unpaid provider key never fails the build: the preflight battery
+# runs with --probe-on-auth-error skip, and the jq gate turns "key rejected"
+# into a green skip with a notice.
+#
+# Prerequisites:
+#   - mcp >= v1.3.0 (installed below via go install)
+#   - Node (preinstalled on GitHub-hosted runners) for the npx MCP server
+#   - secret: TYPESAFE_API_KEY — your own TypeSafe key
+
+name: Jev PR review (mcp)
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+      - run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0
+
+      - name: Score the diff with jev_review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TYPESAFE_API_KEY:-}" ]; then
+            echo "::notice::TYPESAFE_API_KEY is not set — skipping Jev review"
+            exit 0
+          fi
+
+          # Preflight: the self-test battery, one call per tool. In skip mode
+          # a rejected key exits 0 with auth_skipped counts, so the jq gate —
+          # not the exit code — decides whether to proceed.
+          mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+            jev check --probe --probe-on-auth-error skip --json --timeout 60s >jev-check.json
+          jq -e '.summary.auth_skipped == 0 and .summary.errors == 0' jev-check.json >/dev/null || {
+            echo "::notice::Jev provider key rejected (auth/billing) — skipping Jev review"
+            exit 0
+          }
+
+          # The review call. The diff rides stdin via jq + -A -, never --arg.
+          gh pr diff --patch --color never >pr.diff
+          gh pr view --json title,body -q '.title + "\n\n" + (.body // "")' >pr-request.txt
+          jq -n --rawfile diff pr.diff --rawfile request pr-request.txt \
+            '{request: $request, diff: $diff, tests: "see the pull request checks"}' \
+            | mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s tools call jev_review -A - \
+            | tee jev-review.json
+
+          # One --json document (the tool result); the payload is inside it.
+          ACTION="$(jq -r '(.structuredContent // (.content[] | select(.type == "text") | .text | fromjson)) | .action' jev-review.json)"
+          case "$ACTION" in
+            auto|review|escalate) ;;
+            *) echo "unrecognized jev_review action: $ACTION" >&2; exit 1 ;;
+          esac
+
+          jq -r --arg action "$ACTION" '
+            (.structuredContent // (.content[] | select(.type == "text") | .text | fromjson)) |
+            "Jev review: \($action)\n\n" +
+            (if .composite then "composite: \(.composite)\n" else "" end) +
+            (if .safe_to_apply then "safe_to_apply: \(.safe_to_apply)\n" else "" end) +
+            (if .reason_codes and (.reason_codes | length) > 0 then "reason codes: \(.reason_codes | join(", "))\n" else "" end) +
+            (if .limiting_rubrics and (.limiting_rubrics | length) > 0 then "limiting rubrics: \(.limiting_rubrics | join(", "))\n" else "" end) +
+            "\nScored by TypeSafe Jev via jev_review; advisory only."
+          ' jev-review.json >review-body.md
+
+          # escalate is still data for the reviewer, not a failed build.
+          gh pr review --comment --body-file review-body.md
