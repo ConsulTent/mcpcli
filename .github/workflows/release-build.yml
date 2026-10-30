@@ -28,9 +28,9 @@ jobs:
         run: |
           mkdir dist
           for platform in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
-            GOOS=${platform%/*}; GOARCH=${platform#*/}
+            export GOOS="${platform%/*}" GOARCH="${platform#*/}"
             EXT=""; [ "$GOOS" = "windows" ] && EXT=".exe"
-            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -o "dist/mcp-$GOOS-$GOARCH$EXT" ./cmd/mcp
+            CGO_ENABLED=0 go build -trimpath -o "dist/mcp-$GOOS-$GOARCH$EXT" ./cmd/mcp
           done
           ls -l dist/ # pass signal for act and dispatch runs
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
