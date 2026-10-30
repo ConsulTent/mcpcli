@@ -18,3 +18,15 @@ jobs:
       # TestCompatUnreachable waits out 7 x 30s network timeouts - irrelevant to
       # dependency bumps; run it locally before feature commits instead.
       - run: go test ./... -count=1 -skip TestCompatUnreachable
+
+  # examples/workflows ships copy-paste templates; keep them actionlint-clean
+  # so they are valid the moment someone copies them.
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+      - run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - run: actionlint examples/workflows/*.yml .github/workflows/*.yml

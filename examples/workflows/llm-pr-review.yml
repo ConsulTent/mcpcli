@@ -1,0 +1,77 @@
+# Pure-LLM PR review with the mcp CLI.
+#
+# Copy this file into YOUR repository as .github/workflows/llm-pr-review.yml
+# and set the OPENROUTER_API_KEY secret. It mirrors the shape of managed
+# reviewers (claude-code-action, `@claude review`, Copilot-as-reviewer) but
+# runs your own prompt and model through an MCP server, driven by mcp.
+#
+# Prerequisites:
+#   - mcp >= v1.3.0 (installed below via go install)
+#   - Node (preinstalled on GitHub-hosted runners) for the npx MCP server
+#   - secret: OPENROUTER_API_KEY — an OpenRouter key (https://openrouter.ai)
+#   - env:    LLM_REVIEW_MODEL — any model id your key may use
+#
+# Managed alternatives for the same job, if you prefer zero infrastructure:
+#   - anthropics/claude-code-action (GitHub Action; mention-triggered)
+#   - hosted `@claude review` (Anthropic infrastructure, Team/Enterprise)
+#   - Copilot as a reviewer: gh pr edit <n> --add-reviewer @copilot
+#     (the request is scriptable; the review itself runs on GitHub)
+
+name: LLM PR review (mcp)
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  LLM_REVIEW_MODEL: anthropic/claude-sonnet-4.5 # any id your OpenRouter key allows
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+      - run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0
+
+      - name: Review the diff with an LLM
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_ALLOWED_MODELS: ${{ env.LLM_REVIEW_MODEL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::notice::OPENROUTER_API_KEY is not set — skipping LLM review"
+            exit 0
+          fi
+
+          # The diff and the prompt. Payloads this size never go through --arg
+          # (argv limits, quoting); they ride stdin via jq + -A -.
+          gh pr diff --patch --color never > pr.diff
+          cat >prompt.md <<'EOF'
+          You are reviewing a pull request diff. Report only real issues:
+          correctness bugs, security problems, and behavior changes the title
+          does not mention. Cite file and line. If the diff is clean, say so
+          in one line.
+          EOF
+          cat prompt.md pr.diff >full-prompt.txt
+
+          jq -n --rawfile message full-prompt.txt --arg model "$LLM_REVIEW_MODEL" \
+            '{model: $model, message: $message}' \
+            | mcp --command "npx -y openrouter-mcp@2.0.1" --json --timeout 120s tools call ask_model -A - \
+            | tee llm-review.json
+
+          # The one --json document is the tool result; the reply is its text.
+          jq -r '(.structuredContent.reply // (.content[] | select(.type == "text") | .text))' \
+            llm-review.json >review-body.md
+
+          gh pr review --comment --body-file review-body.md

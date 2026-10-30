@@ -49,3 +49,6 @@ dist/
 /docs/superpowers/
 /docs/upstream/
 /docs/IMPLEMENTATION_PLAN.md
+
+# agent worktrees (using-git-worktrees skill)
+.worktrees/

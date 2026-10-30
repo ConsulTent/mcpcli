@@ -1,0 +1,123 @@
+# Hybrid PR review with the mcp CLI: Jev screens, the LLM reviews what needs it.
+#
+# Copy this file into YOUR repository as
+# .github/workflows/hybrid-pr-review.yml and set two secrets:
+#   - TYPESAFE_API_KEY     (https://console.typesafe.ai) — the screener
+#   - OPENROUTER_API_KEY   (https://openrouter.ai)       — the reviewer
+# plus env LLM_REVIEW_MODEL (any id your OpenRouter key allows).
+#
+# This is TypeSafe's confidence-routing pattern applied to code review: the
+# cheap judgment model scores every diff first (jev_review, rubrics
+# correctness/spec_match/test_gap/blast_radius + safe_to_apply) and decides
+# whether the expensive LLM runs at all:
+#
+#   auto              -> "screened by Jev" comment; the LLM never runs
+#   review / escalate -> one LLM review, focused by the rubrics and reason
+#                        codes that limited Jev's score
+#
+# A dead or unpaid TypeSafe key never fails the build (preflight skips green,
+# same as jev-pr-review.yml); a missing OpenRouter key downgrades the LLM leg
+# to a notice when Jev routes something to it.
+
+name: Hybrid PR review (Jev screens, LLM reviews)
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  LLM_REVIEW_MODEL: anthropic/claude-sonnet-4.5 # any id your OpenRouter key allows
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+      - run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0
+
+      - name: Screen with Jev, then review with the LLM only if routed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_ALLOWED_MODELS: ${{ env.LLM_REVIEW_MODEL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TYPESAFE_API_KEY:-}" ]; then
+            echo "::notice::TYPESAFE_API_KEY is not set — skipping hybrid review"
+            exit 0
+          fi
+
+          # Screener preflight: dead key => green skip (see jev-pr-review.yml).
+          mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+            jev check --probe --probe-on-auth-error skip --json --timeout 60s >jev-check.json
+          jq -e '.summary.auth_skipped == 0 and .summary.errors == 0' jev-check.json >/dev/null || {
+            echo "::notice::Jev provider key rejected (auth/billing) — skipping hybrid review"
+            exit 0
+          }
+
+          gh pr diff --patch --color never >pr.diff
+          gh pr view --json title,body -q '.title + "\n\n" + (.body // "")' >pr-request.txt
+          jq -n --rawfile diff pr.diff --rawfile request pr-request.txt \
+            '{request: $request, diff: $diff, tests: "see the pull request checks"}' \
+            | mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s tools call jev_review -A - \
+            | tee jev-review.json
+
+          # One --json document (the tool result); extract the payload once
+          # (structured content or JSON text, whichever the server sent) and
+          # let every later jq read plain fields.
+          jq '(.structuredContent // (.content[] | select(.type == "text") | .text | fromjson))' \
+            jev-review.json >jev-payload.json
+          ACTION="$(jq -r '.action' jev-payload.json)"
+          case "$ACTION" in
+            auto|review|escalate) ;;
+            *) echo "unrecognized jev_review action: $ACTION" >&2; exit 1 ;;
+          esac
+
+          # Cheap path: Jev cleared it; the LLM never runs.
+          if [ "$ACTION" = "auto" ]; then
+            gh pr review --comment --body "Screened by Jev: **auto** — no LLM review needed. (jev_review rubrics all clear; advisory only.)"
+            exit 0
+          fi
+
+          # Routed path: focus the LLM with exactly what limited Jev's score.
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::notice::Jev routed this PR to LLM review ($ACTION) but OPENROUTER_API_KEY is not set — posting the Jev report only"
+            gh pr review --comment --body "Jev routed this PR to LLM review ($ACTION), but no LLM key is configured. Jev reason codes: $(jq -r '(.reason_codes // []) | join(", ")' jev-payload.json)"
+            exit 0
+          fi
+
+          cat >prompt.md <<'EOF'
+          You are reviewing a pull request diff a cheap judgment model already
+          flagged. Focus on exactly the rubrics and reason codes below; cite
+          file and line; report only real issues.
+          EOF
+          jq -r '
+            "limiting rubrics: \(.limiting_rubrics // [] | join(", "))\nreason codes: \(.reason_codes // [] | join(", "))\nsafe_to_apply: \(.safe_to_apply // "n/a")\n"
+          ' jev-payload.json >focus.txt
+          cat prompt.md focus.txt pr.diff >full-prompt.txt
+
+          jq -n --rawfile message full-prompt.txt --arg model "$LLM_REVIEW_MODEL" \
+            '{model: $model, message: $message}' \
+            | mcp --command "npx -y openrouter-mcp@2.0.1" --json --timeout 120s tools call ask_model -A - \
+            | tee llm-review.json
+
+          {
+            echo "Jev routed this PR to LLM review (**$ACTION**)."
+            echo
+            cat focus.txt
+            echo
+            echo "---"
+            echo
+            jq -r '(.structuredContent.reply // (.content[] | select(.type == "text") | .text))' llm-review.json
+          } >review-body.md
+          gh pr review --comment --body-file review-body.md

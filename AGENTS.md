@@ -30,10 +30,17 @@ protocol compatibility). Full human-facing detail lives in `README.md`.
 - `--json` makes every command print exactly one machine-readable JSON
   document (the SDK result object) on stdout and nothing else. Prefer it.
 - Exit codes: `0` success, `1` any failure (bad flags, connect failure, tool
-  error). Check the exit code before parsing.
+  error). Check the exit code before parsing. Two `jev` exceptions where a
+  bad outcome is still data and exits `0`: escalated verdicts
+  (`verdicts[].escalate`) and `jev check --probe --probe-on-auth-error
+  skip` after a rejected provider key (`summary.auth_skipped > 0`).
 - Error paths: failed one-shot runs print the error as plain text on stderr —
-  stdout may be empty. The one exception is a tool result with `isError`:
-  the full JSON result still reaches stdout first, then the command exits 1.
+  stdout may be empty. The exceptions are a tool result with `isError`
+  (the full JSON result still reaches stdout first, then the command exits 1)
+  and every `jev check` outcome after a successful connect: the report
+  document always prints on stdout first — in `--json` and human modes —
+  including no-flavor, aborted-battery and probe-error cases. A connect
+  failure still prints only the error (stdout may be empty).
 - `--timeout` bounds each network operation (default 30s). Set it explicitly
   in scripts so a slow server cannot hang a step.
 - Tool image/audio blocks render as one ASCII summary line each, never a
@@ -116,6 +123,37 @@ stdio servers (local tools) — pass the whole command line as one string:
 
 ```sh
 mcp --command "npx -y @modelcontextprotocol/server-everything" --json tools list
+```
+
+Jev judgment servers — flavor-agnostic typed questions; `--json` prints ONE
+canonical document (`{flavor, tool, verdicts[], escalated?}`) for every
+flavor, so parse that shape and never the per-server formats. `ask` infers
+the primitive from the flags (`--opt` choice, `--levels` score, else noul):
+
+```sh
+mcp --command "npx -y @jkudish/jev-mcp" --json jev ask "is the build green?" --context "$CI_LOG"
+mcp --command "jev-use serve" --json jev ask "ship or hold?" --opt ship --opt hold
+mcp --command "npx -y @jkudish/jev-mcp" --json jev verify --claim "tests pass" --evidence "$CI_LOG"
+mcp --command "npx -y @jkudish/jev-mcp" --json jev check   # flavor + support matrix
+```
+
+Self-test a Jev server (one minimal question per tool, per-probe timeouts;
+skip-on-auth keeps a dead provider key from failing CI):
+
+```sh
+mcp --command "npx -y @jkudish/jev-mcp" --json jev check --probe --probe-on-auth-error skip --timeout 60s
+# {"flavor":"jkudish","matched":[...],"ops":[...],"probes":[{"tool":"jev_noul","status":"ok",...}],
+#  "summary":{"ok":12,"escalate":0,"skipped":0,"auth_skipped":0,"errors":0}}
+# summary gate for scripts: jq -e '.summary.auth_skipped == 0 and .summary.errors == 0'
+```
+
+Diff-sized payloads (PR review, logs) never go through `--arg` — argv limits
+and JSON re-typing break on exactly the large inputs. Pipe them through jq
+into `-A -` instead, and stdin is consumed before any connection opens:
+
+```sh
+jq -n --rawfile diff pr.diff --arg request "$PR_TITLE" '{request: $request, diff: $diff}' \
+  | mcp --command "npx -y @jkudish/jev-mcp" --json --timeout 120s tools call jev_review -A -
 ```
 
 The REPL (`mcp -i --url ...`) holds one session open for many operations;
