@@ -61,7 +61,11 @@ jobs:
             echo "captures contain auth_skipped output — the key was rejected; refusing to document"; exit 1
           }
           jq -e '.summary.auth_skipped == 0 and .summary.errors == 0' capture/check-probe-json.out >/dev/null
+      # always(): the captures ARE the diagnostics — a failed run's stdout/
+      # stderr files explain why (and nothing skip-shaped reaches docs, since
+      # the assertions above already gate the documented path).
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
           name: jev-captures
           path: capture/
