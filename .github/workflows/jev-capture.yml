@@ -58,8 +58,14 @@ jobs:
           for f in capture/*.out; do
             test -s "$f" || { echo "$f is empty"; exit 1; }
           done
-          ! grep -rq "auth_skipped" capture/ || {
-            echo "captures contain auth_skipped output — the key was rejected; refusing to document"; exit 1
+          # The battery's summary line always NAMES the counts ("0
+          # auth_skipped" included), so grep for nonzero counts and abort
+          # markers — the JSON summary below is the authoritative check.
+          ! grep -Eq '[1-9][0-9]* auth_skipped' capture/check-probe.out || {
+            echo "battery skipped auth probes — the key was rejected; refusing to document"; exit 1
+          }
+          ! grep -q "battery aborted" capture/check-probe.out || {
+            echo "battery aborted — refusing to document"; exit 1
           }
           jq -e '.summary.auth_skipped == 0 and .summary.errors == 0' capture/check-probe-json.out >/dev/null
       # always(): the captures ARE the diagnostics — a failed run's stdout/
