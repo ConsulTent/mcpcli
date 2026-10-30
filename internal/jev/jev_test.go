@@ -42,6 +42,18 @@ func TestOpKindMarshalJSON(t *testing.T) {
 	}
 }
 
+// TestOpKindUnmarshalJSON pins the round trip and the refusal of unknown
+// names — the zero value must never masquerade as a real op.
+func TestOpKindUnmarshalJSON(t *testing.T) {
+	var op OpKind
+	if err := json.Unmarshal([]byte(`"score"`), &op); err != nil || op != OpKindScore {
+		t.Fatalf("unmarshal score = %v (err %v), want OpKindScore", op, err)
+	}
+	if err := json.Unmarshal([]byte(`"box"`), &op); err == nil {
+		t.Fatal("unmarshal of an unknown name succeeded, want error")
+	}
+}
+
 // TestIsAuthError pins the classification the CI lane depends on: recognized
 // rejections match (token-bounded codes and phrases), everything a healthy
 // server can produce does not — a false positive would silently skip a real

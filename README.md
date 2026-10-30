@@ -358,8 +358,8 @@ it by passing the secret; without it the lane skips green:
 
 A rejected key (unpaid bill, rotation) never fails the workflow: the battery
 runs with `--probe-on-auth-error skip`, posts a notice, and the job stays
-green. The lane needs `mcp` ≥ v1.3.0 from the tap and skips green on older
-installed versions.
+green. The lane installs `mcp` ≥ v1.3.0 with `go install` and skips green on
+older installed versions.
 
 Post the results on your README:
 

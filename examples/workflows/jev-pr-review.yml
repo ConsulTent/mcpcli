@@ -69,22 +69,25 @@ jobs:
             | mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s tools call jev_review -A - \
             | tee jev-review.json
 
-          # One --json document (the tool result); the payload is inside it.
-          ACTION="$(jq -r '(.structuredContent // (.content[] | select(.type == "text") | .text | fromjson)) | .action' jev-review.json)"
+          # One --json document (the tool result); the payload is inside it,
+          # as structured content or as JSON text — whichever the server sent.
+          # Extract it once; every later jq reads plain fields.
+          jq '(.structuredContent // (.content[] | select(.type == "text") | .text | fromjson))' \
+            jev-review.json >jev-payload.json
+          ACTION="$(jq -r '.action' jev-payload.json)"
           case "$ACTION" in
             auto|review|escalate) ;;
             *) echo "unrecognized jev_review action: $ACTION" >&2; exit 1 ;;
           esac
 
           jq -r --arg action "$ACTION" '
-            (.structuredContent // (.content[] | select(.type == "text") | .text | fromjson)) |
             "Jev review: \($action)\n\n" +
             (if .composite then "composite: \(.composite)\n" else "" end) +
             (if .safe_to_apply then "safe_to_apply: \(.safe_to_apply)\n" else "" end) +
             (if .reason_codes and (.reason_codes | length) > 0 then "reason codes: \(.reason_codes | join(", "))\n" else "" end) +
             (if .limiting_rubrics and (.limiting_rubrics | length) > 0 then "limiting rubrics: \(.limiting_rubrics | join(", "))\n" else "" end) +
             "\nScored by TypeSafe Jev via jev_review; advisory only."
-          ' jev-review.json >review-body.md
+          ' jev-payload.json >review-body.md
 
           # escalate is still data for the reviewer, not a failed build.
           gh pr review --comment --body-file review-body.md

@@ -46,12 +46,12 @@ func newJevCommand() *cobra.Command {
 // with a dash (jev ask -- -why?).
 func newJevAskCommand() *cobra.Command {
 	var (
-		opts      []string
-		levelsRaw string
-		contextS  string
-		evidence  []string
-		prioriti  string
-		threshold float64
+		opts       []string
+		levelsRaw  string
+		contextS   string
+		evidence   []string
+		priorities string
+		threshold  float64
 	)
 	cmd := &cobra.Command{
 		Use:   "ask QUESTION",
@@ -82,7 +82,7 @@ true). Prefix the question with "--" when it begins with a dash.`,
 					return err
 				}
 			}
-			if flags.Changed("threshold") && math.IsNaN(threshold) {
+			if flags.Changed("threshold") && (math.IsNaN(threshold) || threshold < 0 || threshold > 1) {
 				return fmt.Errorf("invalid --threshold %v: expected a number between 0 and 1", threshold)
 			}
 
@@ -96,14 +96,11 @@ true). Prefix the question with "--" when it begins with a dash.`,
 				Text:       question,
 				Context:    contextS,
 				Evidence:   evidence,
-				Priorities: prioriti,
+				Priorities: priorities,
 				Options:    opts,
 				Levels:     levels,
 			}
 			if flags.Changed("threshold") {
-				if threshold < 0 || threshold > 1 {
-					return fmt.Errorf("invalid --threshold %v: expected a number between 0 and 1", threshold)
-				}
 				q.Threshold, q.HasThreshold = threshold, true
 			}
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
@@ -115,7 +112,7 @@ true). Prefix the question with "--" when it begins with a dash.`,
 	cmd.Flags().StringVar(&levelsRaw, "levels", "", "score levels as comma-separated ordered descriptions (e.g. \"routine,incident\")")
 	cmd.Flags().StringVar(&contextS, "context", "", "shared context or state for the question")
 	cmd.Flags().StringArrayVar(&evidence, "evidence", nil, "evidence text (repeatable)")
-	cmd.Flags().StringVar(&prioriti, "priorities", "", "priorities for a choice (jkudish flavor)")
+	cmd.Flags().StringVar(&priorities, "priorities", "", "priorities for a choice (jkudish flavor)")
 	cmd.Flags().Float64Var(&threshold, "threshold", 0, "confidence/auto-accept threshold between 0 and 1")
 	return cmd
 }
@@ -425,21 +422,16 @@ func runJevOp(ctx context.Context, session *mcp.ClientSession, cmd *cobra.Comman
 }
 
 // detectJev lists the server's tools and resolves the Jev adapter. It
-// returns every jev_* tool name present — the caller's no-flavor error names
-// them so the user can see what the server does expose.
+// returns every jev_* tool name present (matched plus unmatched — the
+// caller's no-flavor error names them so the user can see what the server
+// does expose).
 func detectJev(ctx context.Context, session *mcp.ClientSession) (jev.Adapter, []string, error) {
 	res, err := session.ListTools(ctx, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list tools: %w", err)
 	}
-	adapter, _, _ := jev.AdapterFor(res.Tools)
-	var names []string
-	for _, t := range res.Tools {
-		if t != nil && strings.HasPrefix(t.Name, "jev_") {
-			names = append(names, t.Name)
-		}
-	}
-	return adapter, names, nil
+	adapter, matched, unmatched := jev.AdapterFor(res.Tools)
+	return adapter, slices.Concat(matched, unmatched), nil
 }
 
 // askSetFlags records which ask flags the user actually set, so the mapping
@@ -545,9 +537,9 @@ func resultErrorText(res *mcp.CallToolResult) string {
 	return "tool returned an error"
 }
 
-// sanitizeNote renders a server-supplied note for an error message:
-// printable ASCII only, whitespace collapsed, capped like shortError —
-// terminal escapes and oversized payloads cannot reach the message.
+// sanitizeNote renders an adapter note for an error message: printable ASCII
+// only, whitespace collapsed, capped like shortError — so nothing exotic can
+// reach the message even if a future note grows server-supplied text.
 func sanitizeNote(note string) string {
 	var b strings.Builder
 	space := false

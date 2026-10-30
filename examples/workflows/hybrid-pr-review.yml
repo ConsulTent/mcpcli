@@ -72,7 +72,12 @@ jobs:
             | mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s tools call jev_review -A - \
             | tee jev-review.json
 
-          ACTION="$(jq -r '(.structuredContent // (.content[] | select(.type == "text") | .text | fromjson)) | .action' jev-review.json)"
+          # One --json document (the tool result); extract the payload once
+          # (structured content or JSON text, whichever the server sent) and
+          # let every later jq read plain fields.
+          jq '(.structuredContent // (.content[] | select(.type == "text") | .text | fromjson))' \
+            jev-review.json >jev-payload.json
+          ACTION="$(jq -r '.action' jev-payload.json)"
           case "$ACTION" in
             auto|review|escalate) ;;
             *) echo "unrecognized jev_review action: $ACTION" >&2; exit 1 ;;
@@ -87,7 +92,7 @@ jobs:
           # Routed path: focus the LLM with exactly what limited Jev's score.
           if [ -z "${OPENROUTER_API_KEY:-}" ]; then
             echo "::notice::Jev routed this PR to LLM review ($ACTION) but OPENROUTER_API_KEY is not set — posting the Jev report only"
-            gh pr review --comment --body "Jev routed this PR to LLM review ($ACTION), but no LLM key is configured. Jev reason codes: $(jq -r '(.structuredContent // (.content[] | select(.type == "text") | .text | fromjson)) | (.reason_codes // [] | join(", "))' jev-review.json)"
+            gh pr review --comment --body "Jev routed this PR to LLM review ($ACTION), but no LLM key is configured. Jev reason codes: $(jq -r '(.reason_codes // []) | join(", ")' jev-payload.json)"
             exit 0
           fi
 
@@ -96,9 +101,9 @@ jobs:
           flagged. Focus on exactly the rubrics and reason codes below; cite
           file and line; report only real issues.
           EOF
-          jq -r '(.structuredContent // (.content[] | select(.type == "text") | .text | fromjson)) |
+          jq -r '
             "limiting rubrics: \(.limiting_rubrics // [] | join(", "))\nreason codes: \(.reason_codes // [] | join(", "))\nsafe_to_apply: \(.safe_to_apply // "n/a")\n"
-          ' jev-review.json >focus.txt
+          ' jev-payload.json >focus.txt
           cat prompt.md focus.txt pr.diff >full-prompt.txt
 
           jq -n --rawfile message full-prompt.txt --arg model "$LLM_REVIEW_MODEL" \

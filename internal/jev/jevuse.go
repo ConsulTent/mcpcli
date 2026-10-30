@@ -38,7 +38,7 @@ func (jevUse) Supports(op OpKind) Support {
 	}
 }
 
-func (jevUse) Build(op OpKind, q Question) (string, map[string]any, error) {
+func (a jevUse) Build(op OpKind, q Question) (string, map[string]any, error) {
 	question := map[string]any{"id": "q", "type": op.String(), "question": q.Text}
 	switch op {
 	case OpKindNoul:
@@ -67,7 +67,7 @@ func (jevUse) Build(op OpKind, q Question) (string, map[string]any, error) {
 		}
 		return "jev_gate", args, nil
 	default:
-		s := (jevUse{}).Supports(op)
+		s := a.Supports(op)
 		return "", nil, opError(op, "unsupported on the jev-use flavor: %s", s.Note)
 	}
 	args := map[string]any{

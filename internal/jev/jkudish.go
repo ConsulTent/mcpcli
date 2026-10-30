@@ -20,7 +20,7 @@ var jkudishTools = []string{
 }
 
 func (jkudish) Name() string         { return "jkudish" }
-func (jkudish) Vocabulary() []string { return append([]string(nil), jkudishTools...) }
+func (jkudish) Vocabulary() []string { return jkudishTools }
 
 // Detect matches the flavor's signature: at least two of its four core
 // judgment tools. The threshold keeps a single shared name (say, a foreign
@@ -131,7 +131,7 @@ func (jkudish) Probes() []Probe {
 	}
 }
 
-func (jkudish) Build(op OpKind, q Question) (string, map[string]any, error) {
+func (a jkudish) Build(op OpKind, q Question) (string, map[string]any, error) {
 	switch op {
 	case OpKindNoul:
 		args := map[string]any{"propositions": []string{q.Text}}
@@ -177,7 +177,7 @@ func (jkudish) Build(op OpKind, q Question) (string, map[string]any, error) {
 		}
 		return "jev_screen", args, nil
 	default:
-		s := (jkudish{}).Supports(op)
+		s := a.Supports(op)
 		return "", nil, opError(op, "unsupported on the jkudish flavor: %s", s.Note)
 	}
 }
@@ -297,25 +297,17 @@ func (jkudish) parseNoulResult(payload map[string]any) (Verdict, error) {
 			return noulVerdict(p, item["label"])
 		}
 	}
-	return Verdict{}, errMissing("probability")
+	return Verdict{}, &fieldError{field: "probability"}
 }
 
 func noulVerdict(p any, label any) (Verdict, error) {
 	f, ok := p.(float64)
 	if !ok {
-		return Verdict{}, errTyped("probability", p, "a number")
+		return Verdict{}, &fieldError{field: "probability", got: p, want: "a number"}
 	}
 	v := Verdict{Type: OpKindNoul, Answer: f}
 	if l, ok := label.(string); ok {
 		v.Label = l
 	}
 	return v, nil
-}
-
-func errMissing(field string) error {
-	return &fieldError{field: field, want: ""}
-}
-
-func errTyped(field string, got any, want string) error {
-	return &fieldError{field: field, got: got, want: want}
 }

@@ -32,12 +32,12 @@ func (legostin) Supports(OpKind) Support {
 	return Support{Note: "browser-automation flavor: its tools drive Chrome rather than answer judgment primitives; call them directly via tools call (e.g. tools call jev_ask)"}
 }
 
-func (legostin) Build(op OpKind, _ Question) (string, map[string]any, error) {
-	return "", nil, opError(op, "unsupported on the legostin flavor: %s", (legostin{}).Supports(op).Note)
+func (a legostin) Build(op OpKind, _ Question) (string, map[string]any, error) {
+	return "", nil, opError(op, "unsupported on the legostin flavor: %s", a.Supports(op).Note)
 }
 
-func (legostin) Parse(op OpKind, _ *mcp.CallToolResult) ([]Verdict, error) {
-	return nil, opError(op, "unsupported on the legostin flavor: %s", (legostin{}).Supports(op).Note)
+func (a legostin) Parse(op OpKind, _ *mcp.CallToolResult) ([]Verdict, error) {
+	return nil, opError(op, "unsupported on the legostin flavor: %s", a.Supports(op).Note)
 }
 
 // Probes is the flavor's doctor-only battery. Every other tool the server

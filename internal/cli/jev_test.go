@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,12 +23,6 @@ import (
 // addJkudishFixture registers the jkudish flavor's twelve tools with canned
 // results and realistic input schemas, and records every call by tool name.
 func addJkudishFixture(s *mcp.Server, calls *[]string) {
-	schema := func(props ...string) json.RawMessage {
-		b, _ := json.Marshal(map[string]any{"type": "object", "properties": map[string]any{}})
-		_ = props
-		return b
-	}
-	_ = schema
 	text := func(doc string) *mcp.CallToolResult {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: doc}}}
 	}
@@ -573,6 +568,40 @@ func TestJevCheckE2E(t *testing.T) {
 			t.Fatalf("stdout = %q, want the matrix to name jev_judge", stdout)
 		}
 	})
+	t.Run("schema drift lands as a data note", func(t *testing.T) {
+		// jev_noul without "propositions" declared: the support matrix must
+		// carry the drift note instead of failing or hiding it.
+		srv := newTestMCPServerWithTools(t, func(s *mcp.Server) {
+			s.AddTool(&mcp.Tool{Name: "jev_noul", InputSchema: json.RawMessage(`{"type":"object","properties":{"context":{}}}`)},
+				func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+					return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"probability": 0.5}`}}}, nil
+				})
+			s.AddTool(&mcp.Tool{Name: "jev_verify", InputSchema: json.RawMessage(`{"type":"object"}`)},
+				func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+					return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"results": [{"verdict": "unknown"}]}`}}}, nil
+				})
+		})
+		stdout, _, _, err := runRoot(t, "--url", srv.URL, "--json", "jev", "check")
+		if err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		doc := decodeJevCheck(t, stdout)
+		if doc.Flavor != "jkudish" {
+			t.Fatalf("flavor = %q, want jkudish (two-tool signature)", doc.Flavor)
+		}
+		found := false
+		for _, row := range doc.Ops {
+			if row.Op == "noul" {
+				found = true
+				if !row.OK || !strings.Contains(row.Note, "schema drift") || !strings.Contains(row.Note, "propositions") {
+					t.Fatalf("noul row = %+v, want drift note naming propositions", row)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("no noul row in the support matrix")
+		}
+	})
 }
 
 // TestJevCheckProbeE2E pins the battery on all three flavors: one row per
@@ -619,13 +648,11 @@ func TestJevCheckProbeE2E(t *testing.T) {
 		}
 		assertCountsInvariant(t, doc)
 		for _, name := range []string{"jev_task", "jev_ask", "jev_tabs"} {
-			if !slicesContains(calls, name) {
-				// never called — exactly the point
-				continue
+			if slices.Contains(calls, name) {
+				t.Fatalf("browser tool %s was called; battery must not drive Chrome", name)
 			}
-			t.Fatalf("browser tool %s was called; battery must not drive Chrome", name)
 		}
-		if !slicesContains(calls, "jev_doctor") {
+		if !slices.Contains(calls, "jev_doctor") {
 			t.Fatal("jev_doctor was not called")
 		}
 	})
@@ -641,16 +668,6 @@ func TestJevCheckProbeE2E(t *testing.T) {
 		}
 		assertCountsInvariant(t, doc)
 	})
-}
-
-// slicesContains is slices.Contains for the two call sites here.
-func slicesContains(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 // TestJevCheckProbeAuthSkip pins the CI posture: a provider auth rejection
@@ -689,7 +706,7 @@ func TestJevCheckProbeAuthSkip(t *testing.T) {
 			if !strings.Contains(stderr, "warning: provider key rejected") {
 				t.Fatalf("stderr = %q, want the skip warning", stderr)
 			}
-			if slicesContains(calls, "jev_gate") {
+			if slices.Contains(calls, "jev_gate") {
 				t.Fatal("jev_gate was called after the abort; later probes must not run")
 			}
 		})
@@ -762,7 +779,7 @@ func TestJevCheckProbeNonAuthError(t *testing.T) {
 		t.Fatalf("summary = %+v, want one error one skipped", doc.Summary)
 	}
 	assertCountsInvariant(t, doc)
-	if slicesContains(calls, "jev_gate") {
+	if slices.Contains(calls, "jev_gate") {
 		t.Fatal("jev_gate ran after a non-auth abort")
 	}
 }

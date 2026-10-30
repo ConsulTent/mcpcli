@@ -37,9 +37,10 @@ protocol compatibility). Full human-facing detail lives in `README.md`.
 - Error paths: failed one-shot runs print the error as plain text on stderr —
   stdout may be empty. The exceptions are a tool result with `isError`
   (the full JSON result still reaches stdout first, then the command exits 1)
-  and every `jev check` outcome: the report document always prints on stdout
-  first — in `--json` and human modes — including no-flavor, aborted-battery
-  and probe-error cases.
+  and every `jev check` outcome after a successful connect: the report
+  document always prints on stdout first — in `--json` and human modes —
+  including no-flavor, aborted-battery and probe-error cases. A connect
+  failure still prints only the error (stdout may be empty).
 - `--timeout` bounds each network operation (default 30s). Set it explicitly
   in scripts so a slow server cannot hang a step.
 - Tool image/audio blocks render as one ASCII summary line each, never a
