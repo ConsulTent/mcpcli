@@ -329,6 +329,9 @@ Homebrew tap:
 
 ```yaml
 # .github/workflows/mcp-e2e.yml in YOUR repository
+
+```yaml
+# .github/workflows/mcp-e2e.yml in YOUR repository
 on: [push, workflow_dispatch]
 jobs:
   mcp-e2e:
@@ -358,8 +361,13 @@ it by passing the secret; without it the lane skips green:
 
 A rejected key (unpaid bill, rotation) never fails the workflow: the battery
 runs with `--probe-on-auth-error skip`, posts a notice, and the job stays
-green. The lane installs `mcp` ≥ v1.3.0 with `go install` and skips green on
-older installed versions.
+green. In caller and scheduled runs the lane installs `mcp` ≥ v1.3.0 with
+`go install` and skips green until that tag exists.
+
+This repository also self-tests: every push to its `main` runs the same
+ladder, stdio smoke and Jev battery against an `mcp` built from the merge
+commit — so a merged regression cannot land silently; it fails that run
+immediately instead of waiting for the weekly schedule or the next release.
 
 Post the results on your README:
 

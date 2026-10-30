@@ -8,6 +8,10 @@
 #
 # Pin to a commit hash and keep the current release tag as the comment;
 # bump both when you upgrade. See README "Test your MCP server".
+#
+# This repository also self-tests on every push to main: the e2e-main job
+# runs the same ladder, stdio smoke and Jev battery against an mcp built
+# from the merge commit, so a regression cannot land silently.
 name: mcp-e2e
 
 on:
@@ -32,6 +36,17 @@ on:
         default: "https://mcp.svelte.dev/mcp"
   schedule:
     - cron: "0 3 * * 1"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Merge runs cancel superseded merge runs; every other event gets a per-run
+# group so callers (who pin this workflow) never inherit cancellation.
+concurrency:
+  group: ${{ github.event_name == 'push' && format('mcp-e2e-push-{0}', github.ref) || format('mcp-e2e-{0}', github.run_id) }}
+  cancel-in-progress: true
 
 # pipefail: a failing mcp exit must not hide behind a successful jq in a pipeline
 defaults:
@@ -40,6 +55,7 @@ defaults:
 
 jobs:
   e2e:
+    if: github.event_name != 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -87,8 +103,10 @@ jobs:
   # A rejected key (unpaid bill, rotation) NEVER fails the job: the battery
   # runs with --probe-on-auth-error skip and the jq branch below posts a
   # notice and stays green. Until the v1.3.0 tag exists, the install step
-  # skips the lane green the same way.
+  # skips the lane green the same way. The push-to-main variant of this lane
+  # lives in e2e-main below.
   jev:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     env:
       TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
@@ -143,6 +161,7 @@ jobs:
   # token-authenticated server against a real, stateful MCP server. Uses the job's
   # GITHUB_TOKEN; callers inherit this smoke test automatically.
   github-mcp-server:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     container:
       image: "ghcr.io/homebrew/brew:main"
@@ -152,7 +171,11 @@ jobs:
     steps:
       - name: Install mcp and github-mcp-server
         run: |
-          brew install jq ConsulTent/tap/mcpcli
+          # 'go' is installed via brew: the moving ghcr.io/homebrew/brew:main
+          # image stopped bundling a Go toolchain (verified 2026-10-30 —
+          # 'go: command not found' on main's dispatch run), and this job
+          # predates that breakage only because older image builds shipped go.
+          brew install jq go ConsulTent/tap/mcpcli
           GOBIN="$(brew --prefix)/bin" go install github.com/github/github-mcp-server/v2/cmd/github-mcp-server@v2.0.3
         env:
           HOME: /home/linuxbrew
@@ -171,3 +194,90 @@ jobs:
             --arg owner="${GITHUB_REPOSITORY_OWNER}" \
             --arg repo="${GITHUB_REPOSITORY#*/}" \
             --arg path=README.md | jq -e 'has("content") or has("text")'
+
+  # Per-merge self-test (push to main only): the same coverage as the jobs
+  # above, but with mcp built from the merge commit — so a regression in a
+  # merged PR fails here, immediately, instead of waiting for the weekly
+  # schedule or the next release. Steps are inlined (not shared with the
+  # jobs above via local composite actions) because a reusable workflow's
+  # `./` references resolve against the CALLER's workspace — callers do not
+  # have this repository's actions — so inline is the only form that works
+  # for both callers and this job. Keep the ladder, stdio smoke and battery
+  # in sync with the jobs above.
+  e2e-main:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Build mcp and github-mcp-server from source
+        # setup-go pins GOTOOLCHAIN=local for the go.mod version (1.27.1);
+        # github-mcp-server needs >= 1.27.3, so re-enable auto-switching for
+        # the installs (mcp itself still builds with the repo's toolchain).
+        env:
+          GOTOOLCHAIN: auto
+        run: |
+          go install ./cmd/mcp
+          go install github.com/github/github-mcp-server/v2/cmd/github-mcp-server@v2.0.3
+      - run: mcp --version
+      - name: ping
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json --timeout 60s ping | jq -e '.ok == true'
+      - name: info
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json info | jq -e '.serverInfo.name and .protocolVersion'
+      - name: compat
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json compat | jq -e '.results | length > 0'
+      - name: tools list
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json tools list | jq -e '.tools | length > 0'
+      - name: call a tool
+        run: |
+          SRV="https://mcp.svelte.dev/mcp"
+          TOOL=$(mcp --url "$SRV" --json tools list | jq -r '[.tools[] | select((.inputSchema.required // []) | length == 0)][0].name // empty')
+          if [ -n "$TOOL" ]; then
+            mcp --url "$SRV" --json --timeout 60s tools call "$TOOL" >/dev/null
+          else
+            echo "no tool without required arguments; skipping call"
+          fi
+      - name: resources
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json resources list >/dev/null
+      - name: prompts
+        run: mcp --url "https://mcp.svelte.dev/mcp" --json prompts list >/dev/null
+      # stdio smoke: keep these three steps in sync with the
+      # github-mcp-server job above.
+      - name: info (stdio)
+        run: mcp --command "github-mcp-server stdio" --json --timeout 90s info | jq -e '.serverInfo.name and .protocolVersion'
+      - name: tools list (stdio)
+        run: mcp --command "github-mcp-server stdio" --json --timeout 90s tools list | jq -e '.tools | length > 0'
+      - name: call get_file_contents (stdio)
+        run: |
+          mcp --command "github-mcp-server stdio" --json --timeout 90s tools call get_file_contents \
+            --arg owner="${GITHUB_REPOSITORY_OWNER}" \
+            --arg repo="${GITHUB_REPOSITORY#*/}" \
+            --arg path=README.md | jq -e 'has("content") or has("text")'
+      # Jev battery, repo-built mcp: same script as the jev job above minus
+      # the release install (mcp is already on PATH from this checkout).
+      # Keep in sync with the jev job.
+      - name: Jev battery (one question per tool)
+        run: |
+          if [ -z "${TYPESAFE_API_KEY:-}" ]; then
+            echo "::notice::TYPESAFE_API_KEY is not set — skipping the Jev battery"
+            exit 0
+          fi
+
+          mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+            jev check --probe --probe-on-auth-error skip --json --timeout 60s >jev-check.json
+          jq -e '((.summary.ok // 0) + (.summary.escalate // 0) + (.summary.skipped // 0)
+                  + (.summary.auth_skipped // 0) + (.summary.errors // 0)) == (.probes | length)' \
+            jev-check.json >/dev/null
+          if jq -e '.summary.auth_skipped > 0' jev-check.json >/dev/null; then
+            echo "::notice::Jev provider key rejected (auth/billing) — battery skipped, job green"
+          elif ! jq -e '.summary.errors == 0' jev-check.json >/dev/null; then
+            echo "battery reported tool errors"; exit 1
+          else
+            mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+              jev ask "is 2+2=4?" --json --timeout 60s | jq -e '.verdicts | length == 1'
+          fi
