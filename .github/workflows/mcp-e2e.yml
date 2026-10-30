@@ -102,10 +102,16 @@ jobs:
       - name: Jev battery (one question per tool)
         run: |
           # Pre-release window: until the v1.3.0 tag exists the lane skips
-          # green so the weekly schedule cannot go red. Only "unknown
-          # revision" skips — any other install failure fails the job.
+          # green so the weekly schedule cannot go red. The grep is pinned to
+          # mcp itself ("cmd/mcp@v1.3.0: invalid version: unknown revision")
+          # so a post-release dependency resolution failure — which shares
+          # the "unknown revision" wording — fails red instead of skipping
+          # green. If go's wording ever drifts, the lane goes red: visible,
+          # the safe direction for a monitor. Any other install failure
+          # fails the job.
           if ! go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0 2>/tmp/install.log; then
-            if grep -q "unknown revision" /tmp/install.log; then
+            if grep -q "cmd/mcp@v1.3.0: invalid version: unknown revision" /tmp/install.log; then
+              grep "unknown revision" /tmp/install.log >&2
               echo "::notice::mcp v1.3.0 is not published yet — skipping the Jev lane"
               exit 0
             fi
