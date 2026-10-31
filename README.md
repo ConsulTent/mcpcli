@@ -549,6 +549,10 @@ same `--in-file [KEY=]PATH` slots as the one-shot commands fill
 $ printf 'jev ask is 2+2=4?\njev screen --in-file purpose=code-review --in-file patch.diff\nexit\n' | mcp -i --command "npx -y @jkudish/jev-mcp"
 ```
 
+The session in action:
+
+![mcp REPL: jev ask, screen and verify lines with their verdicts](docs/screenshots/example-repl-jev.png)
+
 In the REPL, `--timeout` is per command: each line runs under its own `--timeout` window
 (the connection is bounded once, at startup). Errors are printed and the loop continues;
 only `exit`, `quit`, or end of input leaves it.
