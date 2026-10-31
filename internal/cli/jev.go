@@ -164,7 +164,7 @@ contents are raw strings, never JSON-decoded.`,
 				q.Threshold, q.HasThreshold = threshold, true
 			}
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
-				return runJevOp(ctx, session, cmd, op, q, askSetFlags(cmd))
+				return runJevOp(ctx, session, cmd.OutOrStdout(), cmd.ErrOrStderr(), op, q, askSetFlags(cmd))
 			})
 		},
 	}
@@ -230,7 +230,7 @@ never JSON-decoded.`,
 				purposeV = lastInFile(inVals, "purpose")
 			}
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
-				return runJevOp(ctx, session, cmd, jev.OpKindScreen, jev.Question{Text: text, Purpose: purposeV}, nil)
+				return runJevOp(ctx, session, cmd.OutOrStdout(), cmd.ErrOrStderr(), jev.OpKindScreen, jev.Question{Text: text, Purpose: purposeV}, nil)
 			})
 		},
 	}
@@ -291,7 +291,7 @@ an error here.`,
 				q.Threshold, q.HasThreshold = threshold, true
 			}
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
-				return runJevOp(ctx, session, cmd, jev.OpKindVerify, q, nil)
+				return runJevOp(ctx, session, cmd.OutOrStdout(), cmd.ErrOrStderr(), jev.OpKindVerify, q, nil)
 			})
 		},
 	}
@@ -333,7 +333,7 @@ the decision as advice in your own permission flow.`,
 				return err
 			}
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
-				return runJevOp(ctx, session, cmd, jev.OpKindGate, jev.Question{Tool: name, Input: gateInput, State: state}, nil)
+				return runJevOp(ctx, session, cmd.OutOrStdout(), cmd.ErrOrStderr(), jev.OpKindGate, jev.Question{Tool: name, Input: gateInput, State: state}, nil)
 			})
 		},
 	}
@@ -485,9 +485,9 @@ type checkResult struct {
 // runJevOp runs one canonical op end to end inside an open session: detect
 // the flavor, map and build the call, warn about flags the mapping drops,
 // execute, and render. An isError result still prints the document first,
-// then fails with format.ErrToolError — the tools call semantics.
-func runJevOp(ctx context.Context, session *mcp.ClientSession, cmd *cobra.Command, op jev.OpKind, q jev.Question, setFlags map[string]bool) error {
-	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+// then fails with format.ErrToolError — the tools call semantics. Callers
+// own the connection and pass their output writers (the op* pattern).
+func runJevOp(ctx context.Context, session *mcp.ClientSession, out, errOut io.Writer, op jev.OpKind, q jev.Question, setFlags map[string]bool) error {
 	adapter, toolNames, err := detectJev(ctx, session)
 	if err != nil {
 		return err
