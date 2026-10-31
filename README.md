@@ -327,10 +327,13 @@ $ mcp --command "npx -y @jkudish/jev-mcp" jev screen \
 read internal/cli/testdata/gutenberg-sample.txt (3894 bytes)
 ```
 
-The `read` notice (stderr, every mode) is real output from this repository;
-the verdict line is the same `screen pass · …` shape shown above — the
+The `read` notice (stderr, every mode) is real output from this repository.
+The full run below was captured live by the
 [jev-capture](https://github.com/ConsulTent/mcpcli/actions/workflows/jev-capture.yml)
-workflow captures this exact command's live answer.
+workflow — including an honest verdict: Carroll's verse is not a
+code-review payload, and the relevance gate says so.
+
+![mcp jev screen --in-file: the whole Snark Fit travels file → wire against the live jkudish server](docs/screenshots/example-infile-screen.png)
 
 `--in-file` combines with the existing text flags: files carry the big
 payloads, flags the short ones. An explicit flag beats a file for the same

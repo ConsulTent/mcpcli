@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d1117; font-family: "SF Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace; }
+  .terminal {
+    width: 1160px; border-radius: 10px; overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0,0,0,.55);
+  }
+  .titlebar {
+    height: 36px; background: #2d2d2d; display: flex; align-items: center;
+    padding: 0 14px; gap: 8px;
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .r { background: #ff5f57; } .y { background: #febc2e; } .g { background: #28c840; }
+  .title { flex: 1; text-align: center; color: #9d9d9d; font-size: 12.5px; font-family: -apple-system, "Segoe UI", sans-serif; margin-right: 66px; }
+  .body { background: #14161a; padding: 18px 26px 24px; font-size: 14.5px; line-height: 1.62; color: #d0d7de; white-space: pre; }
+  .cmd { color: #d0d7de; font-weight: 700; }
+  .p { color: #28c840; font-weight: 700; }
+  .step { color: #9d9d9d; }
+  .ok { color: #3ad07a; }
+  .dim { color: #8b949e; }
+</style>
+</head>
+<body>
+<div class="terminal">
+  <div class="titlebar">
+    <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+    <div class="title">mcp — jev screen --in-file (jkudish/jev-mcp)</div>
+  </div>
+  <div class="body"><span class="p">&gt;</span> <span class="cmd">mcp --command "npx -y @jkudish/jev-mcp@0.14.7" jev screen \
+        --in-file internal/cli/testdata/gutenberg-sample.txt --purpose "code review"</span>
+<span class="step">read internal/cli/testdata/gutenberg-sample.txt (3894 bytes)</span>
+<span class="step">==&gt; connecting to npx -y @jkudish/jev-mcp@0.14.7...</span>
+<span class="ok">✅ connecting to npx -y @jkudish/jev-mcp@0.14.7 done in 1.066s</span>
+screen skip · injection 0.01 / relevance 0.02 / substance 0.99 · not relevant to the stated purpose (relevance 0.02)
+<span class="dim">… the whole Fit travels file → wire (argv carries only the path); the verdict is the model's live judgment</span>
+</div>
+</div>
+</body>
+</html>
