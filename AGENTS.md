@@ -48,6 +48,19 @@ protocol compatibility). Full human-facing detail lives in `README.md`.
   diverts them. `--outfile` on `tools call`, `resources read`, and the REPL's
   `call`/`read` writes media content to files with MIME-derived extensions,
   printing `wrote …` notices to stderr in every mode.
+- `--in-file [KEY=]PATH` (on `jev ask`/`screen`/`verify`, `tools call`,
+  `prompts get`) reads a text input from a file (`-` for stdin, once per
+  invocation; repeatable; 8 MiB cap; must be UTF-8 — invalid bytes are named
+  with their offset). Values are ALWAYS raw strings, never JSON-decoded —
+  unlike `--arg`. A bare PATH replaces the command's primary text (`jev ask`
+  QUESTION, `jev screen` TEXT, mutually exclusive with the positional);
+  `KEY=PATH` fills a named slot (`jev ask`: `context=` `evidence=`
+  `priorities=`; `jev screen`: `purpose=`; `jev verify`: `claim=` `evidence=`
+  — appending after flag values; `tools call`/`prompts get`: any argument
+  key). Explicit flags beat files; sources load `-A` → `--in-file` → `--arg`.
+  Each read prints `read <path> (N bytes)` to stderr in every mode. Prefer
+  this over `$(cat file)` (argv caps, quoting, `/proc/<pid>/cmdline exposure)
+  and over `-A -` + jq when the payload is one text value, not a JSON object.
 
 ### Global flags
 
@@ -139,6 +152,21 @@ mcp --command "npx -y @jkudish/jev-mcp" --json jev verify --claim "tests pass" -
 mcp --command "npx -y @jkudish/jev-mcp" --json jev check   # flavor + support matrix
 ```
 (answers above are the live model's; they vary per call)
+
+Text-sized inputs read straight from files with `--in-file` — no `$(cat
+file)` (argv caps, quoting, `/proc/<pid>/cmdline exposure). Bare `PATH`
+replaces the question/text; `KEY=PATH` fills a slot. The `read …` notice
+goes to stderr, so piped stdout stays exactly the one canonical JSON
+document:
+
+```sh
+mcp --command "npx -y @jkudish/jev-mcp" --json jev screen \
+  --in-file internal/cli/testdata/gutenberg-sample.txt --purpose "code review"
+# verdicts[].answer is the screen action (pass|review|block|skip)
+mcp --command "npx -y @jkudish/jev-mcp" --json jev verify \
+  --in-file claim=claim.txt --in-file evidence=ci.log
+mcp --url "$SRV" --json tools call jev_review --in-file diff=pr.diff --arg request="$PR_TITLE"
+```
 
 Self-test a Jev server (one minimal question per tool, per-probe timeouts;
 skip-on-auth keeps a dead provider key from failing CI). Real capture,

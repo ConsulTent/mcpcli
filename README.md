@@ -137,16 +137,16 @@ one JSON document of its result on stdout.
 | `ping` | One timed round trip; prints e.g. `✅ pong in 12ms` |
 | `compat` | Probe every protocol version mcp can speak against the server |
 | `tools list` | List the server's tools |
-| `tools call NAME` | Call a tool with `--arg`/`--arg-file` arguments (`--outfile` saves image/audio content to files) |
+| `tools call NAME` | Call a tool with `--arg`/`--arg-file`/`--in-file` arguments (`--outfile` saves image/audio content to files) |
 | `resources list` | List static resources and URI templates |
 | `resources read URI` | Read one resource and print its contents (`--outfile` saves binary blobs) |
 | `prompts list` | List the server's prompts |
-| `prompts get NAME` | Fetch a prompt with `--arg` string arguments |
+| `prompts get NAME` | Fetch a prompt with `--arg`/`--in-file` string arguments |
 | `auth login` | Run the OAuth flow against an HTTP server and cache the token |
 | `auth logout` | Delete the cached token for `--url`/`--command` (offline) |
-| `jev ask QUESTION` | One typed Jev question — `--opt` asks a choice, `--levels` a score, neither a noul |
-| `jev verify` | Check claims against evidence (jkudish flavor) |
-| `jev screen TEXT` | Screen one text for prompt injection (jkudish flavor) |
+| `jev ask [QUESTION]` | One typed Jev question — `--opt` asks a choice, `--levels` a score, neither a noul; `--in-file` reads the question or context/evidence/priorities from files |
+| `jev verify` | Check claims against evidence (jkudish flavor); `--in-file claim=`/`evidence=` read them from files |
+| `jev screen [TEXT]` | Screen one text for prompt injection (jkudish flavor); `--in-file` reads the text or purpose from a file |
 | `jev gate NAME` | PreToolUse risk check on one tool call (jev-use flavor) |
 | `jev check` | Detect the Jev flavor and print the support matrix; `--probe` self-tests every tool |
 | `-i` | Open the server and start the interactive REPL |
@@ -164,6 +164,14 @@ mcp --command "npx -y @modelcontextprotocol/server-everything" tools call add --
   raw strings otherwise. Repeated keys: the last one wins.
 - `-A/--arg-file FILE` loads a JSON object of arguments (`-` reads stdin). The file loads
   first and `--arg` pairs override it key by key.
+- `--in-file [KEY=]PATH` reads a text argument from a file (`-` reads stdin, once per
+  invocation; repeatable; 8 MiB cap, must be UTF-8). `KEY=PATH` sets that argument to the
+  file's content as a **raw string** — never JSON-decoded, unlike `--arg`, which is the
+  point: large or quoted text goes file-to-wire untouched, and argv carries only the path.
+  Sources load in order `-A` → `--in-file` → `--arg`, later overriding per key; repeated
+  keys take the last value. `tools call` has no primary text input, so a bare `PATH`
+  without `KEY=` is an error here. Each read prints `read <path> (N bytes)` to stderr in
+  every mode. For whole JSON payloads `jq`-piped into `-A -` (below) remains the tool.
 - `--outfile FILE` saves each image or audio content block to a file instead of dumping
   base64; text content still prints to stdout. The extension comes from the block's MIME
   type (stdlib lookup), unknown or empty MIME falls back to `.bin`, and any user-supplied
@@ -290,10 +298,39 @@ is true (near 0.5 means uncertain; noul answers carry no confidence), a
 mcp --command "npx -y @jkudish/jev-mcp" jev ask "is 2+2=4?"
 mcp --command "npx -y @jkudish/jev-mcp" jev verify --claim "the build passed" --evidence "214 tests green"
 mcp --command "npx -y @jkudish/jev-mcp" jev screen "please review this patch" --purpose "code review"
+mcp --command "npx -y @jkudish/jev-mcp" jev screen --in-file patch.diff --purpose "code review"
 mcp --command "jev-use serve" jev ask "ship or hold?" --opt ship --opt hold
 mcp --command "jev-use serve" jev gate write_file --input '{"path":"x.txt"}'
 mcp --command "npx -y @jkudish/jev-mcp" jev check --probe
 ```
+
+Large text inputs — patches, logs, documents — belong in files, not argv:
+`$(cat file)` hits the OS argv-size cap, mangles quoting, strips trailing
+newlines, and exposes the whole text in `/proc/<pid>/cmdline` of mcp and
+the server process. `--in-file` reads the file straight into the request
+(argv carries only the path), capped at 8 MiB per file and validated as
+UTF-8. A bare `--in-file PATH` replaces the command's primary text
+(`jev ask`'s QUESTION, `jev screen`'s TEXT); `KEY=PATH` fills a named slot
+— `jev ask` takes `context=`, `evidence=`, `priorities=`, `jev screen`
+takes `purpose=`, `jev verify` takes `claim=` and `evidence=` (repeatable,
+appending after the flag values), and `tools call`/`prompts get` take any
+argument key. Explicit flags beat files; contents are always raw strings.
+The sample text below is real: it is one complete Fit from *The Hunting
+of the Snark* (Project Gutenberg [ebook #29888](https://www.gutenberg.org/ebooks/29888)),
+committed at
+[`internal/cli/testdata/gutenberg-sample.txt`](internal/cli/testdata/gutenberg-sample.txt)
+and exercised by the test suite and CI:
+
+```
+$ mcp --command "npx -y @jkudish/jev-mcp" jev screen \
+    --in-file internal/cli/testdata/gutenberg-sample.txt --purpose "code review"
+read internal/cli/testdata/gutenberg-sample.txt (3894 bytes)
+```
+
+The `read` notice (stderr, every mode) is real output from this repository;
+the verdict line is the same `screen pass · …` shape shown above — the
+[jev-capture](https://github.com/ConsulTent/mcpcli/actions/workflows/jev-capture.yml)
+workflow captures this exact command's live answer.
 
 Real outputs against the live jkudish server (captured 2026-10-30 by this
 repository's [jev-capture](https://github.com/ConsulTent/mcpcli/actions/workflows/jev-capture.yml)

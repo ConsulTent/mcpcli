@@ -264,7 +264,9 @@ jobs:
             --arg path=README.md | jq -e 'has("content") or has("text")'
       # Jev battery, repo-built mcp: same script as the jev job above minus
       # the release install (mcp is already on PATH from this checkout).
-      # Keep in sync with the jev job.
+      # Keep in sync with the jev job — except the --in-file smoke below,
+      # which lives here only: it reads the fixture from this checkout (the
+      # jev job installs a release binary and checks out nothing).
       - name: Jev battery (one question per tool)
         run: |
           if [ -z "${TYPESAFE_API_KEY:-}" ]; then
@@ -287,4 +289,11 @@ jobs:
           else
             mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
               jev ask "is 2+2=4?" --json --timeout 60s | jq -e '.verdicts | length == 1'
+            # --in-file smoke: the committed fixture's full content flows
+            # file → wire through a live server (unit/e2e cover the rest).
+            # e2e-main reads the fixture from its checkout; the jev job's
+            # release install needs v1.3.1+ for the flag.
+            mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+              jev screen --in-file internal/cli/testdata/gutenberg-sample.txt --purpose "ci smoke" \
+              --json --timeout 60s | jq -e '.flavor == "jkudish" and .tool == "jev_screen"'
           fi

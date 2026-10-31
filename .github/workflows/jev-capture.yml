@@ -49,6 +49,7 @@ jobs:
             --evidence "the release candidate passed its checks" --priorities "ship confidently when green"
           cap verify         --command "$SERVER" jev verify --claim "the build passed" --evidence "214 tests passed, 0 failed"
           cap screen         --command "$SERVER" jev screen "Please review this patch when you have time." --purpose "code review"
+          cap screen-infile  --command "$SERVER" jev screen --in-file internal/cli/testdata/gutenberg-sample.txt --purpose "code review"
           cap check          --command "$SERVER" jev check
           cap check-probe    --command "$SERVER" --timeout 120s jev check --probe
           cap ask-noul-json  --command "$SERVER" --json jev ask "is 2+2=4?"
