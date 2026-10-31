@@ -139,9 +139,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          for _ in $(seq 1 36); do
-            [ "$(gh pr view "$PR_NUMBER" -R ConsulTent/homebrew-tap --json statusCheckRollup --jq 'length')" -gt 0 ] && break
-            sleep 5
+          # gh pr checks exits 1 both on a failed check and on "no checks
+          # reported" (fresh PR, queued runner). Retry only the latter, for
+          # up to ~10 minutes; a red check fails fast, and a merge without
+          # green checks never happens (v1.3.1's run hit the slow-
+          # registration case for real).
+          ok=""
+          for _ in $(seq 1 20); do
+            if out=$(gh pr checks "$PR_NUMBER" -R ConsulTent/homebrew-tap --watch --fail-fast 2>&1); then
+              ok=1
+              break
+            fi
+            if ! grep -q "no checks reported" <<<"$out"; then
+              echo "$out"
+              exit 1
+            fi
+            sleep 30
           done
-          gh pr checks "$PR_NUMBER" -R ConsulTent/homebrew-tap --watch --fail-fast
+          [ -n "$ok" ] || { echo "::error::no checks registered on PR $PR_NUMBER after ~10 minutes"; exit 1; }
           gh pr merge "$PR_NUMBER" -R ConsulTent/homebrew-tap --squash --delete-branch
