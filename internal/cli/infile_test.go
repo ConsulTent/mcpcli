@@ -245,8 +245,7 @@ func TestStdinReadOnce(t *testing.T) {
 		stdinRead = true
 		defer func() { stdinRead = false }()
 		_, err := readInputBounded("-")
-		var wrapped error = err
-		if !errors.Is(wrapped, errStdinUsedTwice) {
+		if !errors.Is(err, errStdinUsedTwice) {
 			t.Fatalf("err = %v, want errStdinUsedTwice through the guard", err)
 		}
 	})

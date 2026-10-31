@@ -40,10 +40,33 @@ func newJevCommand() *cobra.Command {
 	return cmd
 }
 
+// --in-file key sets: the named text slots each jev command accepts (the
+// bare form replaces the command's positional on ask and screen).
+var (
+	jevAskInFileKeys    = map[string]struct{}{"context": {}, "evidence": {}, "priorities": {}}
+	jevScreenInFileKeys = map[string]struct{}{"purpose": {}}
+	jevVerifyInFileKeys = map[string]struct{}{"claim": {}, "evidence": {}}
+)
+
+// inFileArgs adapts the delegating Args validator shared by jev ask and
+// screen: without --in-file the positional is required exactly as before
+// (cobra's own message, by delegation); with it, the positional becomes
+// optional (the file replaces it).
+func inFileArgs(hasInFiles func() bool) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if hasInFiles() {
+			return cobra.MaximumNArgs(1)(cmd, args)
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	}
+}
+
 // newJevAskCommand builds "jev ask QUESTION": one typed question whose
 // primitive is inferred from the flags — --opt asks a choice, --levels a
 // score, anything else a noul. Prefix the question with "--" when it begins
-// with a dash (jev ask -- -why?).
+// with a dash (jev ask -- -why?). --in-file PATH replaces the QUESTION
+// positional with a file's content (--in-file KEY=PATH fills context=,
+// evidence=, priorities=); explicit flags win over files.
 func newJevAskCommand() *cobra.Command {
 	var (
 		opts       []string
@@ -52,24 +75,53 @@ func newJevAskCommand() *cobra.Command {
 		evidence   []string
 		priorities string
 		threshold  float64
+		inFiles    []string
 	)
 	cmd := &cobra.Command{
-		Use:   "ask QUESTION",
+		Use:   "ask [QUESTION]",
 		Short: "Ask one typed judgment question",
 		Long: `Ask one typed judgment question; the primitive is inferred from the flags:
 --opt asks a choice (repeatable, ordered), --levels a score (comma-separated
 ordered levels), and neither asks a noul (the probability the question is
-true). Prefix the question with "--" when it begins with a dash.`,
-		Args: cobra.ExactArgs(1),
+true). Prefix the question with "--" when it begins with a dash.
+
+--in-file [KEY=]PATH reads text inputs from files (repeatable, "-" for
+stdin read once per invocation, 8 MiB cap, must be UTF-8): a bare PATH
+replaces the QUESTION positional (mutually exclusive with it), while
+context=, evidence= and priorities= fill those slots — an explicit flag
+beats the file, evidence files append after --evidence values. File
+contents are raw strings, never JSON-decoded.`,
+		Args: inFileArgs(func() bool { return len(inFiles) > 0 }),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := cmd.Flags()
 			// Flag-shape checks first, before anything that reads input.
 			if flags.Changed("opt") && flags.Changed("levels") {
 				return errors.New("--levels and --opt are mutually exclusive")
 			}
-			question := strings.TrimSpace(args[0])
-			if question == "" {
-				return errors.New("ask requires a non-empty QUESTION")
+			question := ""
+			if len(args) > 0 {
+				question = strings.TrimSpace(args[0])
+			}
+			var inVals []inFileValue
+			if len(inFiles) > 0 {
+				specs, err := parseInFiles(inFiles, jevAskInFileKeys, true)
+				if err != nil {
+					return err
+				}
+				primary, vals, err := applyInFiles(specs, nil, cmd.ErrOrStderr())
+				if err != nil {
+					return err
+				}
+				if primary != "" && len(args) > 0 {
+					return errors.New("QUESTION and --in-file are mutually exclusive")
+				}
+				if question == "" {
+					question = primary // raw file content: no trimming
+				}
+				inVals = vals
+			}
+			if strings.TrimSpace(question) == "" {
+				return errors.New("ask requires a non-empty QUESTION (positional or --in-file)")
 			}
 			opts, err := cleanLabels(opts)
 			if err != nil {
@@ -85,6 +137,14 @@ true). Prefix the question with "--" when it begins with a dash.`,
 			if flags.Changed("threshold") && (math.IsNaN(threshold) || threshold < 0 || threshold > 1) {
 				return fmt.Errorf("invalid --threshold %v: expected a number between 0 and 1", threshold)
 			}
+			contextV := contextS
+			if contextV == "" {
+				contextV = lastInFile(inVals, "context")
+			}
+			prioritiesV := priorities
+			if prioritiesV == "" {
+				prioritiesV = lastInFile(inVals, "priorities")
+			}
 
 			op := jev.OpKindNoul
 			if len(opts) > 0 {
@@ -94,9 +154,9 @@ true). Prefix the question with "--" when it begins with a dash.`,
 			}
 			q := jev.Question{
 				Text:       question,
-				Context:    contextS,
-				Evidence:   evidence,
-				Priorities: priorities,
+				Context:    contextV,
+				Evidence:   slices.Concat(evidence, inFileValues(inVals, "evidence")),
+				Priorities: prioritiesV,
 				Options:    opts,
 				Levels:     levels,
 			}
@@ -114,57 +174,116 @@ true). Prefix the question with "--" when it begins with a dash.`,
 	cmd.Flags().StringArrayVar(&evidence, "evidence", nil, "evidence text (repeatable)")
 	cmd.Flags().StringVar(&priorities, "priorities", "", "priorities for a choice (jkudish flavor)")
 	cmd.Flags().Float64Var(&threshold, "threshold", 0, "confidence/auto-accept threshold between 0 and 1")
+	cmd.Flags().StringArrayVar(&inFiles, "in-file", nil, `text input from FILE: bare PATH replaces QUESTION, or KEY=PATH for context=/evidence=/priorities= (repeatable, "-" for stdin read once; raw string; 8 MiB cap)`)
 	return cmd
 }
 
 // newJevScreenCommand builds "jev screen TEXT": prompt-injection screening of
 // one text (jkudish flavor). Advisory only — the recommendation never grants
-// anything.
+// anything. --in-file PATH replaces the TEXT positional with a file's content
+// (--in-file purpose=PATH fills the purpose); an explicit --purpose wins.
 func newJevScreenCommand() *cobra.Command {
-	var purpose string
+	var (
+		purpose string
+		inFiles []string
+	)
 	cmd := &cobra.Command{
-		Use:   "screen TEXT",
+		Use:   "screen [TEXT]",
 		Short: "Screen one text for prompt injection",
 		Long: `Screen one text for prompt injection (jkudish flavor only). The result is
-advisory: an action of pass, review, block or skip, never a permission.`,
-		Args: cobra.ExactArgs(1),
+advisory: an action of pass, review, block or skip, never a permission.
+
+--in-file [KEY=]PATH reads text from a file ("-" for stdin read once per
+invocation, 8 MiB cap, must be UTF-8): a bare PATH replaces the TEXT
+positional (mutually exclusive with it), purpose= fills the purpose —
+an explicit --purpose flag beats the file. Contents are raw strings,
+never JSON-decoded.`,
+		Args: inFileArgs(func() bool { return len(inFiles) > 0 }),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			text := strings.TrimSpace(args[0])
-			if text == "" {
-				return errors.New("screen requires a non-empty TEXT")
+			text := ""
+			if len(args) > 0 {
+				text = strings.TrimSpace(args[0])
+			}
+			var inVals []inFileValue
+			if len(inFiles) > 0 {
+				specs, err := parseInFiles(inFiles, jevScreenInFileKeys, true)
+				if err != nil {
+					return err
+				}
+				primary, vals, err := applyInFiles(specs, nil, cmd.ErrOrStderr())
+				if err != nil {
+					return err
+				}
+				if primary != "" && len(args) > 0 {
+					return errors.New("TEXT and --in-file are mutually exclusive")
+				}
+				if text == "" {
+					text = primary // raw file content: no trimming
+				}
+				inVals = vals
+			}
+			if strings.TrimSpace(text) == "" {
+				return errors.New("screen requires a non-empty TEXT (positional or --in-file)")
+			}
+			purposeV := purpose
+			if purposeV == "" {
+				purposeV = lastInFile(inVals, "purpose")
 			}
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
-				return runJevOp(ctx, session, cmd, jev.OpKindScreen, jev.Question{Text: text, Purpose: purpose}, nil)
+				return runJevOp(ctx, session, cmd, jev.OpKindScreen, jev.Question{Text: text, Purpose: purposeV}, nil)
 			})
 		},
 	}
 	cmd.Flags().StringVar(&purpose, "purpose", "", "what the text will be used for")
+	cmd.Flags().StringArrayVar(&inFiles, "in-file", nil, `text input from FILE: bare PATH replaces TEXT, or purpose=PATH ("-" for stdin read once; raw string; 8 MiB cap)`)
 	return cmd
 }
 
 // newJevVerifyCommand builds "jev verify": claims checked against evidence
-// (jkudish flavor), one verdict per claim.
+// (jkudish flavor), one verdict per claim. --in-file claim=PATH and
+// evidence=PATH add file contents to those slots (repeatable; file values
+// append after the flag values).
 func newJevVerifyCommand() *cobra.Command {
 	var (
 		claims    []string
 		evidence  []string
 		threshold float64
+		inFiles   []string
 	)
 	cmd := &cobra.Command{
 		Use:   "verify",
 		Short: "Verify claims against evidence",
 		Long: `Verify claims against evidence (jkudish flavor only). Each --claim is
 checked against every --evidence text; the result carries one verdict per
-claim (verified, contradicted, unsupported or unknown) with its confidence.`,
+claim (verified, contradicted, unsupported or unknown) with its confidence.
+
+--in-file claim=PATH and --in-file evidence=PATH read those texts from
+files (repeatable, "-" for stdin read once per invocation, 8 MiB cap,
+must be UTF-8; raw strings, never JSON-decoded); file values append after
+the flag values. verify has no positional, so a bare --in-file PATH is
+an error here.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(claims) == 0 {
-				return errors.New("verify requires at least one --claim")
+			var inVals []inFileValue
+			if len(inFiles) > 0 {
+				specs, err := parseInFiles(inFiles, jevVerifyInFileKeys, false)
+				if err != nil {
+					return err
+				}
+				_, inVals, err = applyInFiles(specs, nil, cmd.ErrOrStderr())
+				if err != nil {
+					return err
+				}
 			}
-			if len(evidence) == 0 {
-				return errors.New("verify requires at least one --evidence")
+			claimsAll := slices.Concat(claims, inFileValues(inVals, "claim"))
+			evidenceAll := slices.Concat(evidence, inFileValues(inVals, "evidence"))
+			if len(claimsAll) == 0 {
+				return errors.New("verify requires at least one --claim (or --in-file claim=…)")
 			}
-			q := jev.Question{Claims: claims, Evidence: evidence}
+			if len(evidenceAll) == 0 {
+				return errors.New("verify requires at least one --evidence (or --in-file evidence=…)")
+			}
+			q := jev.Question{Claims: claimsAll, Evidence: evidenceAll}
 			if cmd.Flags().Changed("threshold") {
 				if threshold < 0 || threshold > 1 || math.IsNaN(threshold) {
 					return fmt.Errorf("invalid --threshold %v: expected a number between 0 and 1", threshold)
@@ -179,6 +298,7 @@ claim (verified, contradicted, unsupported or unknown) with its confidence.`,
 	cmd.Flags().StringArrayVar(&claims, "claim", nil, "claim text (repeatable, at least one)")
 	cmd.Flags().StringArrayVar(&evidence, "evidence", nil, "evidence text (repeatable, at least one)")
 	cmd.Flags().Float64Var(&threshold, "threshold", 0, "auto-accept threshold between 0 and 1")
+	cmd.Flags().StringArrayVar(&inFiles, "in-file", nil, `text input from FILE as claim=PATH or evidence=PATH (repeatable, appends after the flags; "-" for stdin read once; raw string; 8 MiB cap)`)
 	return cmd
 }
 

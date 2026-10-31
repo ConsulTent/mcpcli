@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -40,33 +41,57 @@ func newPromptsListCommand() *cobra.Command {
 }
 
 // newPromptsGetCommand builds "prompts get NAME": fetch one prompt with
-// --arg KEY=VALUE pairs filling its template arguments. Unlike tools call,
-// the values are not JSON-decoded: MCP prompt arguments are string-typed.
+// --arg KEY=VALUE pairs and --in-file [KEY=]PATH raw-text files filling its
+// template arguments. Values are never JSON-decoded: MCP prompt arguments
+// are string-typed.
 func newPromptsGetCommand() *cobra.Command {
-	var pairs []string
+	var (
+		pairs   []string
+		inFiles []string
+	)
 	cmd := &cobra.Command{
 		Use:   "get NAME",
 		Short: "Get a prompt by name with the given arguments",
-		Long: `Get a prompt by name with the given arguments.
+		Long: `Get a prompt by name with its arguments.
 
-Arguments come from repeatable --arg KEY=VALUE pairs. Prompt
-arguments are string-typed per the MCP spec, so values are always
-kept as raw strings: count=3 is the string "3", not the number 3.
-Repeated --arg keys take the last value.`,
+Arguments come from repeatable --arg KEY=VALUE pairs and repeatable
+--in-file [KEY=]PATH raw-text files ("-" reads stdin, once per
+invocation); --in-file loads first and --arg overrides per key, repeated
+keys take the last value. Prompt arguments are string-typed per the MCP
+spec, so values are always raw strings — from flags and files alike:
+count=3 is the string "3", never the number 3. Each --in-file read is
+capped at 8 MiB and must be valid UTF-8; prompts get has no primary text
+input, so a bare PATH (no KEY=) is an error here.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Parse the arguments before any connection is opened, so
 			// malformed input fails fast without touching the network.
-			promptArgs, err := parsePromptArgs(pairs)
+			promptArgs := map[string]string{}
+			if len(inFiles) > 0 {
+				specs, err := parseInFiles(inFiles, nil, false)
+				if err != nil {
+					return err
+				}
+				_, values, err := applyInFiles(specs, nil, cmd.ErrOrStderr())
+				if err != nil {
+					return err
+				}
+				for _, v := range values {
+					promptArgs[v.Key] = v.Content
+				}
+			}
+			pairArgs, err := parsePromptArgs(pairs)
 			if err != nil {
 				return err
 			}
+			maps.Copy(promptArgs, pairArgs)
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
 				return opGetPrompt(ctx, session, args[0], promptArgs, cmd.OutOrStdout())
 			})
 		},
 	}
 	cmd.Flags().StringArrayVar(&pairs, "arg", nil, "prompt argument as KEY=VALUE; the value is kept as a raw string (repeatable, last wins)")
+	cmd.Flags().StringArrayVar(&inFiles, "in-file", nil, `raw-string text argument from FILE as KEY=PATH ("-" for stdin read once; repeatable; --arg overrides per key; 8 MiB cap, must be UTF-8)`)
 	return cmd
 }
 

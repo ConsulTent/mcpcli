@@ -8,7 +8,7 @@ import "runtime/debug"
 
 // Version is the current release of mcp. Every substantive change bumps the
 // minor segment (v1.0.0 -> v1.1.0); see CONTRIBUTING.md.
-const Version = "v1.3.0"
+const Version = "v1.3.1"
 
 // Current returns the module version recorded by the go tool, falling back
 // to Version when the stamp is missing or "(devel)".
