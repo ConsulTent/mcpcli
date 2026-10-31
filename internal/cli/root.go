@@ -36,6 +36,8 @@ type GlobalFlags struct {
 	JSON         bool
 	Plain        bool
 	Interactive  bool
+	Trace        bool
+	Verbose      bool
 }
 
 // NewRootCommand builds the mcp root command with all persistent flags
@@ -65,7 +67,7 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 			if !g.Interactive {
 				return cmd.Help()
 			}
-			return runWithConnection(cmd.Context(), g, func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), g, cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				// runWithConnection bounds its whole run -- OAuth wait,
 				// connect, and fn -- with one --timeout window, but a REPL
 				// must outlive that connect window. WithoutCancel drops the
@@ -125,6 +127,8 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 	pf.DurationVar(&g.Timeout, "timeout", 30*time.Second, "timeout for network operations")
 	pf.BoolVar(&g.JSON, "json", false, "emit machine-readable JSON output")
 	pf.BoolVar(&g.Plain, "plain", false, "plain ASCII output without emoji, ANSI colors, or spinners")
+	pf.BoolVar(&g.Trace, "trace", false, "print a per-call round-trip timing report to stderr (JSON mode: one trace document on stderr; stdout is never touched)")
+	pf.BoolVar(&g.Verbose, "verbose", false, "implies --trace and adds process boot, client-internal time, and totals to the report")
 	pf.BoolVarP(&g.Interactive, "interactive", "i", false, "start the interactive REPL")
 
 	// Subcommands. The auth group manages cached OAuth credentials instead

@@ -17,6 +17,7 @@ import (
 	"github.com/ConsulTent/mcpcli/internal/connection"
 	"github.com/ConsulTent/mcpcli/internal/format"
 	"github.com/ConsulTent/mcpcli/internal/jev"
+	"github.com/ConsulTent/mcpcli/internal/trace"
 	"github.com/ConsulTent/mcpcli/internal/ui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -163,7 +164,7 @@ contents are raw strings, never JSON-decoded.`,
 			if flags.Changed("threshold") {
 				q.Threshold, q.HasThreshold = threshold, true
 			}
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return runJevOp(ctx, session, cmd.OutOrStdout(), cmd.ErrOrStderr(), op, q, askSetFlags(cmd))
 			})
 		},
@@ -229,7 +230,7 @@ never JSON-decoded.`,
 			if purposeV == "" {
 				purposeV = lastInFile(inVals, "purpose")
 			}
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return runJevOp(ctx, session, cmd.OutOrStdout(), cmd.ErrOrStderr(), jev.OpKindScreen, jev.Question{Text: text, Purpose: purposeV}, nil)
 			})
 		},
@@ -290,7 +291,7 @@ an error here.`,
 				}
 				q.Threshold, q.HasThreshold = threshold, true
 			}
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return runJevOp(ctx, session, cmd.OutOrStdout(), cmd.ErrOrStderr(), jev.OpKindVerify, q, nil)
 			})
 		},
@@ -332,7 +333,7 @@ the decision as advice in your own permission flow.`,
 			if err != nil {
 				return err
 			}
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return runJevOp(ctx, session, cmd.OutOrStdout(), cmd.ErrOrStderr(), jev.OpKindGate, jev.Question{Tool: name, Input: gateInput, State: state}, nil)
 			})
 		},
@@ -712,12 +713,18 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 	if cleanup != nil {
 		defer cleanup()
 	}
+	var tracer *trace.Tracer
+	if f.Trace || f.Verbose {
+		tracer = trace.New(f.Verbose)
+	}
 	session, err := connection.Open(cctx, &connection.Options{
 		Command:         f.Command,
 		URL:             f.URL,
 		Auth:            f.Auth,
 		ProtocolVersion: f.Protocol,
 		AuthHandler:     handler,
+		Tracer:          tracer,
+		Label:           "jev check",
 	})
 	if err != nil {
 		return res, err
@@ -792,6 +799,13 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 	}
 	res.Probes = rows
 	res.Summary = &summary
+	if tracer != nil {
+		if ui.Current == ui.JSON {
+			_ = tracer.EmitJSON(cmd.ErrOrStderr())
+		} else {
+			_ = tracer.Render(cmd.ErrOrStderr(), ui.Current == ui.Plain, f.Verbose)
+		}
+	}
 	if summary.Errors > 0 {
 		res.errAfterReport = fmt.Sprintf("jev check: %d of %d probes failed; see the report", summary.Errors, len(rows))
 	}

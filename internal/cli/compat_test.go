@@ -262,7 +262,7 @@ func TestCompatNotSpeakable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows := probeVersions(context.Background(), f, tt.supported)
+			rows := probeVersions(context.Background(), f, tt.supported, nil)
 			if want := len(connection.KnownVersions) + 1; len(rows) != want {
 				t.Fatalf("probeVersions returned %d rows, want %d", len(rows), want)
 			}

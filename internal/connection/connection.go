@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ConsulTent/mcpcli/internal/trace"
 	mcpversion "github.com/ConsulTent/mcpcli/internal/version"
 	"github.com/kballard/go-shellquote"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -27,6 +28,14 @@ type Options struct {
 	// it from internal/auth; stdio connections reject it because a spawned
 	// subprocess has no HTTP surface to authorize.
 	AuthHandler sdkauth.OAuthHandler
+
+	// Tracer, when non-nil, collects per-call round-trip timing for the run:
+	// Open registers its middleware on the client before Connect and starts
+	// one labeled section (Label, or "connect" when empty) — compat's
+	// per-version probes pass their own labels. Nil means tracing is off and
+	// adds nothing.
+	Tracer *trace.Tracer
+	Label  string
 }
 
 // Validate checks that exactly one transport target is set and that OAuth is
@@ -68,6 +77,10 @@ func Open(ctx context.Context, o *Options) (*mcp.ClientSession, error) {
 	// mcpversion is the internal/version package, aliased because Open's
 	// local `version` (the resolved protocol version) shadows the plain name.
 	client := mcp.NewClient(&mcp.Implementation{Name: "mcp", Version: mcpversion.Current()}, nil)
+	if o.Tracer != nil {
+		client.AddSendingMiddleware(o.Tracer.Middleware())
+		o.Tracer.StartSection(o.Label)
+	}
 	var sessionOpts *mcp.ClientSessionOptions
 	if version != "" {
 		sessionOpts = &mcp.ClientSessionOptions{ProtocolVersion: version}

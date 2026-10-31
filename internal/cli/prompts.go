@@ -33,7 +33,7 @@ func newPromptsListCommand() *cobra.Command {
 		Short: "List the prompts the server exposes",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return opListPrompts(ctx, session, cmd.OutOrStdout())
 			})
 		},
@@ -85,7 +85,7 @@ input, so a bare PATH (no KEY=) is an error here.`,
 				return err
 			}
 			maps.Copy(promptArgs, pairArgs)
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return opGetPrompt(ctx, session, args[0], promptArgs, cmd.OutOrStdout())
 			})
 		},

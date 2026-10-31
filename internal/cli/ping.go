@@ -15,7 +15,7 @@ func newPingCommand() *cobra.Command {
 		Short: "Time a round trip to the server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return opPing(ctx, session, cmd.OutOrStdout())
 			})
 		},

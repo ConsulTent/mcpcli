@@ -31,7 +31,7 @@ func newResourcesListCommand() *cobra.Command {
 		Short: "List the resources and resource templates the server exposes",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return opListResources(ctx, session, cmd.OutOrStdout())
 			})
 		},
@@ -48,7 +48,7 @@ func newResourcesReadCommand() *cobra.Command {
 		Short: "Read a resource by URI and print its contents",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return opReadResource(ctx, session, args[0], cmd.OutOrStdout(), cmd.ErrOrStderr(), outfile)
 			})
 		},

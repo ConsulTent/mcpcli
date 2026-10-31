@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2/table"
 	"github.com/ConsulTent/mcpcli/internal/connection"
 	"github.com/ConsulTent/mcpcli/internal/format"
+	"github.com/ConsulTent/mcpcli/internal/trace"
 	"github.com/ConsulTent/mcpcli/internal/ui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -72,10 +73,15 @@ negotiated, which may be older than the server's newest supported version.`,
 				target = f.Command
 			}
 
+			var tracer *trace.Tracer
+			if f.Trace || f.Verbose {
+				tracer = trace.New(f.Verbose)
+			}
+
 			res := compatResult{NativeNote: "negotiated on this transport", Results: []compatRow{}}
 			err := ui.RunWithSpinner(cmd.Context(), "probing protocol versions on "+target, func(ctx context.Context) error {
-				res.Results = probeVersions(ctx, f, mcp.SupportedProtocolVersions())
-				native, err := fetchNative(ctx, f)
+				res.Results = probeVersions(ctx, f, mcp.SupportedProtocolVersions(), tracer)
+				native, err := fetchNative(ctx, f, tracer)
 				if err != nil {
 					return err
 				}
@@ -84,6 +90,13 @@ negotiated, which may be older than the server's newest supported version.`,
 			})
 			if err != nil {
 				return err
+			}
+			if tracer != nil {
+				if ui.Current == ui.JSON {
+					_ = tracer.EmitJSON(cmd.ErrOrStderr())
+				} else {
+					_ = tracer.Render(cmd.ErrOrStderr(), ui.Current == ui.Plain, f.Verbose)
+				}
 			}
 
 			out := cmd.OutOrStdout()
@@ -101,11 +114,11 @@ negotiated, which may be older than the server's newest supported version.`,
 // probe order. supported is the linked SDK's version list (parameterized so
 // tests can drive the not-speakeable branch): a version outside it is
 // reported without any connection attempt.
-func probeVersions(ctx context.Context, f *GlobalFlags, supported []string) []compatRow {
+func probeVersions(ctx context.Context, f *GlobalFlags, supported []string, tracer *trace.Tracer) []compatRow {
 	versions := slices.Concat(connection.KnownVersions[:], []string{connection.DraftAlias})
 	rows := make([]compatRow, 0, len(versions))
 	for _, v := range versions {
-		rows = append(rows, probeVersion(ctx, f, v, supported))
+		rows = append(rows, probeVersion(ctx, f, v, supported, tracer))
 	}
 	return rows
 }
@@ -118,7 +131,7 @@ func probeVersions(ctx context.Context, f *GlobalFlags, supported []string) []co
 // Anything else — connect failure, ping failure, or a version the linked SDK
 // cannot speak — is data about the endpoint, so only it is recorded, never
 // returned as an error.
-func probeVersion(ctx context.Context, f *GlobalFlags, v string, supported []string) compatRow {
+func probeVersion(ctx context.Context, f *GlobalFlags, v string, supported []string, tracer *trace.Tracer) compatRow {
 	row := compatRow{Version: v}
 	resolved, err := connection.ResolveVersion(v)
 	if err != nil {
@@ -148,6 +161,8 @@ func probeVersion(ctx context.Context, f *GlobalFlags, v string, supported []str
 		Command:         f.Command,
 		URL:             f.URL,
 		ProtocolVersion: v, // Open resolves the alias itself
+		Tracer:          tracer,
+		Label:           "probe " + v,
 	})
 	if err != nil {
 		row.Status = statusRejected
@@ -227,13 +242,15 @@ func safeVersion(s string) string {
 // fetchNative performs the unpinned (auto) connect and returns the protocol
 // version the server reported for it. An error here means the endpoint is
 // unreachable: the probe could not be completed.
-func fetchNative(ctx context.Context, f *GlobalFlags) (string, error) {
+func fetchNative(ctx context.Context, f *GlobalFlags, tracer *trace.Tracer) (string, error) {
 	nctx, cancel := context.WithTimeout(ctx, f.Timeout)
 	defer cancel()
 	session, err := connection.Open(nctx, &connection.Options{
 		Command:         f.Command,
 		URL:             f.URL,
 		ProtocolVersion: "auto", // explicitly unpinned; Open resolves the alias
+		Tracer:          tracer,
+		Label:           "native",
 	})
 	if err != nil {
 		return "", err

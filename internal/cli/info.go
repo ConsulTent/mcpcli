@@ -16,7 +16,7 @@ func newInfoCommand() *cobra.Command {
 		Short: "Show the server's identity, protocol version, and capabilities",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return opInfo(session, cmd.OutOrStdout())
 			})
 		},

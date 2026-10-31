@@ -34,7 +34,7 @@ func newToolsListCommand() *cobra.Command {
 		Short: "List the tools the server exposes",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return opListTools(ctx, session, cmd.OutOrStdout())
 			})
 		},
@@ -77,7 +77,7 @@ text input, so a bare PATH (no KEY=) is an error here.`,
 			if err != nil {
 				return err
 			}
-			return runWithConnection(cmd.Context(), FlagsFrom(cmd), func(ctx context.Context, session *mcp.ClientSession) error {
+			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
 				return opCallTool(ctx, session, args[0], toolArgs, cmd.OutOrStdout(), cmd.ErrOrStderr(), outfile)
 			})
 		},
