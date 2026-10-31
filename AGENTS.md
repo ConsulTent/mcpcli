@@ -19,7 +19,9 @@ gitignored — never commit it) updated: `in_progress` + owner on start,
 
 This section is the programmatic contract for agents that shell out to the
 `mcp` binary (for example to inspect an MCP server, call its tools, or check
-protocol compatibility). Full human-facing detail lives in `README.md`.
+protocol compatibility). Full human-facing detail lives in `README.md`. A
+distilled, installable copy of this section ships as the `mcp-cli-usage`
+skill: `/plugin marketplace add ConsulTent/mcpcli`.
 
 ### Contract
 
@@ -163,10 +165,24 @@ document:
 mcp --command "npx -y @jkudish/jev-mcp" --json jev screen \
   --in-file internal/cli/testdata/gutenberg-sample.txt --purpose "code review"
 # verdicts[].answer is the screen action (pass|review|block|skip)
-mcp --command "npx -y @jkudish/jev-mcp" --json jev verify \
-  --in-file claim=claim.txt --in-file evidence=ci.log
-mcp --url "$SRV" --json tools call jev_review --in-file diff=pr.diff --arg request="$PR_TITLE"
 ```
+
+Combined usage — files carry the big payloads, flags the short ones; jev
+`evidence=`/`claim=` file values append after the flag values:
+
+```sh
+mcp --command "npx -y @jkudish/jev-mcp" --json jev ask "is the build green?" \
+  --context "release checklist" --in-file evidence=ci.log
+mcp --command "npx -y @jkudish/jev-mcp" --json jev verify \
+  --in-file claim=claim.txt --in-file evidence=test-output.log
+mcp --command "npx -y @jkudish/jev-mcp" --json jev verify \
+  --claim "no regressions" --in-file evidence=pr.diff --in-file evidence=ci.log
+mcp --url "$SRV" --json tools call jev_review \
+  -A defaults.json --in-file diff=pr.diff --arg request="final check"
+```
+
+Sources load in order `-A` → `--in-file` → `--arg`, later overriding per key,
+so `--arg request="final check"` beats any `request` inside `defaults.json`.
 
 Self-test a Jev server (one minimal question per tool, per-probe timeouts;
 skip-on-auth keeps a dead provider key from failing CI). Real capture,

@@ -1,0 +1,10 @@
+{
+  "name": "mcpcli",
+  "version": "0.1.0",
+  "description": "The mcp CLI (MCP client and inspector) and its mcp-cli-usage skill for AI agents",
+  "author": { "name": "ConsulTent Pte. Ltd.", "url": "https://consultent.ltd" },
+  "homepage": "https://github.com/ConsulTent/mcpcli",
+  "repository": "https://github.com/ConsulTent/mcpcli",
+  "license": "AGPL-3.0-or-later",
+  "skills": "./skills"
+}

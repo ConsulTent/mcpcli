@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+@AGENTS.md
+
+The programmatic mcp-usage contract lives in AGENTS.md and is imported here rather than duplicated.
+
 `mcpcli` is a Go module whose command is `mcp` (binary at `cmd/mcp`), an MCP client and inspector built on the official `github.com/modelcontextprotocol/go-sdk` (pinned at v1.8.0). The design spec (`docs/superpowers/specs/2026-10-05-mcpcli-design.md`) and the completed v1 task plan (`docs/IMPLEMENTATION_PLAN.md`) are local-only: they are gitignored along with `docs/upstream/`. The README is the user-facing contract for flags, output and exit codes, so update it whenever behavior changes. Contributions are AI-assisted and follow a fixed workflow — read `CONTRIBUTING.md` before making any change.
 
 ## Commands
@@ -66,7 +70,7 @@ The flow runs `cmd/mcp/main.go` → `internal/cli` (cobra tree) → `runWithConn
 - `--json`: each command emits one `format.EmitJSON` document of the SDK result struct, and the ui layer writes nothing.
 - `--plain`: output must contain zero non-ASCII and zero ANSI-escape bytes. Tests assert this.
 - Image/audio content blocks render as one ASCII summary line each (`[image/png content, N bytes]`); `--outfile` (tools call, resources read, REPL call/read) writes image/audio blocks and resource blobs to files with MIME-derived extensions and prints `wrote` notices to stderr in every mode.
-- `--in-file [KEY=]PATH` (jev ask/screen/verify, tools call, prompts get; `internal/cli/infile.go`) reads text inputs from files/stdin as ALWAYS-raw strings (never JSON-decoded, unlike `--arg`): bare PATH replaces the command's primary positional, `KEY=PATH` fills a named slot. 8 MiB cap enforced during the read (`io.LimitReader`; regular files rejected by size first), UTF-8 validated with the first bad byte's offset in the error, stdin (`-`) once per invocation via the shared guard in `readArgsInput` (`errStdinUsedTwice`), reads fail fast pre-connect, `read <path> (N bytes)` stderr notices every mode. Precedence: explicit flags > `--in-file` > `-A/--arg-file`; duplicate keys last wins; jev `evidence=`/`claim=` file values append after flag values (`slices.Concat`).
+- `--in-file` internals (`internal/cli/infile.go`; surfaces on jev ask/screen/verify, tools call, prompts get — the usage rules live in AGENTS.md, imported above): a parse/apply split — `parseInFiles` produces specs (bare PATH or `KEY=PATH`, split on the first `=` like `--arg`; `validKeys`/`allowBare` enforced at parse), `applyInFiles` reads each one through `readInputBounded` (`os.Open` + `f.Stat`, regular files over the 8 MiB cap rejected by size first, the read wrapped in `io.LimitReader(cap+1)`) and returns primary + keyed values, keeping duplicate-key handling at the callers' merge points. Values are raw strings by construction, never JSON-decoded. UTF-8 is validated with the first invalid byte's offset named (`utf8InvalidOffset`); stdin (`-`) is once per invocation via the shared `stdinRead` flag (`errStdinUsedTwice`, checked in both `readArgsInput` and `readInputBounded`); reads fail fast pre-connect and print `read <path> (N bytes)` to stderr in every mode. Precedence is implemented at the merge points (explicit flags > `--in-file` > `-A/--arg-file`; duplicate keys last wins; jev `evidence=`/`claim=` file values append via `slices.Concat`).
 - `internal/format` is pure formatting with no mode logic, colors or emoji. Callers choose between a formatter and `EmitJSON`.
 - A tool result with `isError` returns `format.ErrToolError` (exit 1). In `--json` mode the full result still reaches stdout first.
 - The `--client-secret` warning is written directly to stderr in every mode, `--json` included. Keep it that way.

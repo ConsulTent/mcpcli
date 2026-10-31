@@ -418,7 +418,11 @@ unpaid bill must not be a red build.
 
 Ready-made code-quality workflows — pure-LLM PR review, Jev-only PR review,
 and a hybrid where Jev screens and the LLM only reviews what Jev flags —
-live in [examples/workflows/](examples/workflows/).
+live in [examples/workflows/](examples/workflows/). The distilled usage
+knowledge also ships as an installable agent skill (`mcp-cli-usage`):
+`/plugin marketplace add ConsulTent/mcpcli`, or copy
+[`plugins/mcpcli/skills/mcp-cli-usage`](plugins/mcpcli/skills/mcp-cli-usage)
+into any agent's skills directory.
 
 ## Test your MCP server
 

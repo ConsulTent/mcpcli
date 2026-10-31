@@ -1,0 +1,13 @@
+{
+  "name": "consultent-mcpcli",
+  "owner": { "name": "ConsulTent Pte. Ltd." },
+  "description": "mcp CLI plugin from ConsulTent: the mcp-cli-usage skill for driving MCP servers from the command line",
+  "plugins": [
+    {
+      "name": "mcpcli",
+      "source": "./plugins/mcpcli",
+      "description": "The mcp CLI (MCP client and inspector) and its mcp-cli-usage skill for AI agents",
+      "version": "0.1.0"
+    }
+  ]
+}
