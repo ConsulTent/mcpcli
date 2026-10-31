@@ -148,6 +148,10 @@ jobs:
           jq -e '((.summary.ok // 0) + (.summary.escalate // 0) + (.summary.skipped // 0)
                   + (.summary.auth_skipped // 0) + (.summary.errors // 0)) == (.probes | length)' \
             jev-check.json >/dev/null
+          # The all-green path otherwise prints nothing (stdout is the JSON
+          # document, the demo ask ends in a piped jq), so announce the
+          # counts — a green run must say whether it RAN or skipped.
+          echo "::notice::jev battery: $(jq -c '.summary' jev-check.json)"
           if jq -e '.summary.auth_skipped > 0' jev-check.json >/dev/null; then
             echo "::notice::Jev provider key rejected (auth/billing) — battery skipped, job green"
           elif ! jq -e '.summary.errors == 0' jev-check.json >/dev/null; then
@@ -273,6 +277,9 @@ jobs:
           jq -e '((.summary.ok // 0) + (.summary.escalate // 0) + (.summary.skipped // 0)
                   + (.summary.auth_skipped // 0) + (.summary.errors // 0)) == (.probes | length)' \
             jev-check.json >/dev/null
+          # Keep in sync with the jev job: a green run must say whether it
+          # RAN or skipped (the all-green path otherwise prints nothing).
+          echo "::notice::jev battery: $(jq -c '.summary' jev-check.json)"
           if jq -e '.summary.auth_skipped > 0' jev-check.json >/dev/null; then
             echo "::notice::Jev provider key rejected (auth/billing) — battery skipped, job green"
           elif ! jq -e '.summary.errors == 0' jev-check.json >/dev/null; then
