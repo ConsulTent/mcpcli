@@ -6,7 +6,7 @@
 # runs your own prompt and model through an MCP server, driven by mcp.
 #
 # Prerequisites:
-#   - mcp >= v1.3.0 (installed below via go install)
+#   - mcp >= v1.3.1 (installed below via go install; first release with --in-file)
 #   - Node (preinstalled on GitHub-hosted runners) for the npx MCP server
 #   - secret: OPENROUTER_API_KEY — an OpenRouter key (https://openrouter.ai)
 #   - env:    LLM_REVIEW_MODEL — any model id your key may use
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
-      - run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0
+      - run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.1
 
       - name: Review the diff with an LLM
         env:
@@ -55,7 +55,8 @@ jobs:
           fi
 
           # The diff and the prompt. Payloads this size never go through --arg
-          # (argv limits, quoting); they ride stdin via jq + -A -.
+          # (argv limits, quoting); the full prompt rides --in-file as one raw
+          # string, so argv carries only the path.
           gh pr diff --patch --color never > pr.diff
           cat >prompt.md <<'EOF'
           You are reviewing a pull request diff. Report only real issues:
@@ -65,9 +66,9 @@ jobs:
           EOF
           cat prompt.md pr.diff >full-prompt.txt
 
-          jq -n --rawfile message full-prompt.txt --arg model "$LLM_REVIEW_MODEL" \
-            '{model: $model, message: $message}' \
-            | mcp --command "npx -y openrouter-mcp@2.0.1" --json --timeout 120s tools call ask_model -A - \
+          mcp --command "npx -y openrouter-mcp@2.0.1" --json --timeout 120s \
+            tools call ask_model \
+            --in-file message=full-prompt.txt --arg model="$LLM_REVIEW_MODEL" \
             | tee llm-review.json
 
           # The one --json document is the tool result; the reply is its text.

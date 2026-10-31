@@ -25,9 +25,9 @@ per-call cost:
 
 ## Setup common to all three
 
-- **mcp ≥ v1.3.0** — each workflow installs it with
-  `go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0`; bump the version
-  as releases ship.
+- **mcp ≥ v1.3.1** — each workflow installs it with
+  `go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.1`; bump the version
+  as releases ship. v1.3.1 is the first release with `--in-file`.
 - **Node** — preinstalled on GitHub-hosted runners; the MCP servers run via
   `npx`.
 - **Secrets, never literals** — every key arrives through
@@ -38,20 +38,35 @@ per-call cost:
   posts a notice and exits green. The LLM workflow skips the same way when
   its key is absent.
 
-## The one invocation rule
+## The two payload forms
 
 Diff-sized payloads never go through `--arg`: argv length limits break on
 exactly the large PRs review workflows exist for, and values that happen to
-parse as JSON get silently re-typed. They ride stdin instead:
+parse as JSON get silently re-typed. Pick the form by payload shape:
+
+**Form 1 — single text values → `--in-file [KEY=]PATH`** (mcp ≥ v1.3.1). The
+file is read as one raw string — never JSON-decoded — and argv carries only
+the path, never the contents. This is what the workflows use for the diff,
+the request text, and the LLM prompt:
+
+```sh
+mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s \
+  tools call jev_review --in-file request=pr-request.txt --in-file diff=pr.diff \
+  --arg tests="see the pull request checks"
+```
+
+**Form 2 — whole JSON objects → `jq -n` piped into `-A -`.** When the payload
+is a composed multi-field JSON object rather than one text value, build it
+with jq and pipe it through stdin; stdin is consumed before any connection
+opens:
 
 ```sh
 jq -n --rawfile diff pr.diff --arg request "$REQUEST" '{request: $request, diff: $diff}' \
   | mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s tools call jev_review -A -
 ```
 
-Small scalars are fine as `--arg`/`--arg`-equivalents; everything else uses
-`jq -n --rawfile/--arg` piped into `-A -` (stdin). Every `mcp` call sets
-`--timeout` explicitly and parses the single `--json` document on stdout.
+Small scalars are fine as `--arg`. Every `mcp` call sets `--timeout`
+explicitly and parses the single `--json` document on stdout.
 
 ## Pinning
 

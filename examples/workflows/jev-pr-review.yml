@@ -14,7 +14,7 @@
 # into a green skip with a notice.
 #
 # Prerequisites:
-#   - mcp >= v1.3.0 (installed below via go install)
+#   - mcp >= v1.3.1 (installed below via go install; first release with --in-file)
 #   - Node (preinstalled on GitHub-hosted runners) for the npx MCP server
 #   - secret: TYPESAFE_API_KEY — your own TypeSafe key
 
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
-      - run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0
+      - run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.1
 
       - name: Score the diff with jev_review
         env:
@@ -61,12 +61,14 @@ jobs:
             exit 0
           }
 
-          # The review call. The diff rides stdin via jq + -A -, never --arg.
+          # The review call. The diff and request text ride --in-file — raw
+          # strings read from files, so argv never carries the payload.
           gh pr diff --patch --color never >pr.diff
           gh pr view --json title,body -q '.title + "\n\n" + (.body // "")' >pr-request.txt
-          jq -n --rawfile diff pr.diff --rawfile request pr-request.txt \
-            '{request: $request, diff: $diff, tests: "see the pull request checks"}' \
-            | mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s tools call jev_review -A - \
+          mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s \
+            tools call jev_review \
+            --in-file request=pr-request.txt --in-file diff=pr.diff \
+            --arg tests="see the pull request checks" \
             | tee jev-review.json
 
           # One --json document (the tool result); the payload is inside it,

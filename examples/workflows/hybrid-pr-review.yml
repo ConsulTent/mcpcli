@@ -42,7 +42,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
-      - run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.0
+      - run: go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.1
 
       - name: Screen with Jev, then review with the LLM only if routed
         env:
@@ -67,9 +67,10 @@ jobs:
 
           gh pr diff --patch --color never >pr.diff
           gh pr view --json title,body -q '.title + "\n\n" + (.body // "")' >pr-request.txt
-          jq -n --rawfile diff pr.diff --rawfile request pr-request.txt \
-            '{request: $request, diff: $diff, tests: "see the pull request checks"}' \
-            | mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s tools call jev_review -A - \
+          mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --json --timeout 120s \
+            tools call jev_review \
+            --in-file request=pr-request.txt --in-file diff=pr.diff \
+            --arg tests="see the pull request checks" \
             | tee jev-review.json
 
           # One --json document (the tool result); extract the payload once
@@ -106,9 +107,9 @@ jobs:
           ' jev-payload.json >focus.txt
           cat prompt.md focus.txt pr.diff >full-prompt.txt
 
-          jq -n --rawfile message full-prompt.txt --arg model "$LLM_REVIEW_MODEL" \
-            '{model: $model, message: $message}' \
-            | mcp --command "npx -y openrouter-mcp@2.0.1" --json --timeout 120s tools call ask_model -A - \
+          mcp --command "npx -y openrouter-mcp@2.0.1" --json --timeout 120s \
+            tools call ask_model \
+            --in-file message=full-prompt.txt --arg model="$LLM_REVIEW_MODEL" \
             | tee llm-review.json
 
           {
