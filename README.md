@@ -60,6 +60,19 @@ tag; one built from commits past the tag reports a Go pseudo-version (e.g.
 `v1.1.1-0.20261021…-<hash>`); the `internal/version` constant is the fallback
 when no VCS stamp is embedded.
 
+## Install the Skill
+
+AI agents (Claude Code, ZCode) can install the `mcp-cli-usage` skill — mcp's
+flags, recipes and JSON contract — straight from this repository:
+
+```
+/plugin marketplace add ConsulTent/mcpcli
+/plugin install mcpcli@consultent-mcpcli
+```
+
+Once installed, the skill triggers whenever the agent is asked about MCP
+servers, tools, or protocol compatibility.
+
 ## Quickstart
 
 Inspect a stdio server (mcp launches it and speaks MCP over its stdio):
