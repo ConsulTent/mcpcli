@@ -50,5 +50,8 @@ dist/
 /docs/upstream/
 /docs/IMPLEMENTATION_PLAN.md
 
+# SDD plan/ledger scratch (untracked files here stamp +dirty into VCS build info)
+.superpowers/
+
 # agent worktrees (using-git-worktrees skill)
 .worktrees/
