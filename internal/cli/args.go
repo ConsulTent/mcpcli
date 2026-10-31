@@ -51,9 +51,15 @@ func loadArgsFile(path string) (map[string]any, error) {
 }
 
 // readArgsInput returns the bytes of an args source: standard input for "-",
-// the file at path otherwise.
+// the file at path otherwise. Stdin may be consumed once per invocation
+// (stdinRead); a second "-" read anywhere (-A, jev gate --input, --in-file)
+// returns errStdinUsedTwice rather than silently reading a drained pipe.
 func readArgsInput(path string) ([]byte, error) {
 	if path == "-" {
+		if stdinRead {
+			return nil, errStdinUsedTwice
+		}
+		stdinRead = true
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return nil, fmt.Errorf("read args from stdin: %w", err)
