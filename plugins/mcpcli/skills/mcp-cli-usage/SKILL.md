@@ -229,8 +229,13 @@ jq -n --rawfile diff pr.diff --arg request "$PR_TITLE" '{request: $request, diff
 goes to stderr and results to stdout, so piped stdout stays parseable.
 REPL commands: `help`, `tools`, `call NAME [JSON-OBJ] [--outfile FILE]`,
 `resources`, `read URI [--outfile FILE]`, `prompts`, `get NAME [JSON-OBJ]`,
-`info`, `ping`, `exit`/`quit`. Each line runs under its own `--timeout`
-window.
+`info`, `ping`, `jev ask TEXT [--in-file …]`, `jev screen TEXT|--in-file …`,
+`jev verify --in-file claim=… evidence=…`, `exit`/`quit`. Each line runs
+under its own `--timeout` window. jev free text is the remaining tokens
+joined with single spaces (the REPL has no quoting); `--in-file` slots work
+exactly as one-shot, except `-` (stdin is the REPL's own input and is
+rejected). Choice/score ask flags and `jev check` stay with the one-shot
+commands.
 
 ## Guarding secrets in CI
 
