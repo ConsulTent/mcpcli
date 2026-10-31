@@ -164,7 +164,10 @@ func (t *Tracer) Render(w io.Writer, plain, verbose bool) error {
 	}
 	if verbose {
 		wire, sent, recv := t.Totals()
-		internal := t.phases["op"] - wire
+		// Client-internal time is the run's non-wire time: everything spent
+		// in open+op that was not a recorded round trip (our marshal, render,
+		// and the SDK's handshake-side work).
+		internal := t.phases["open"] + t.phases["op"] - wire
 		sep := " · "
 		if plain {
 			sep = ", "
@@ -207,7 +210,7 @@ func (t *Tracer) EmitJSON(w io.Writer) error {
 	}
 	doc.Totals = jsonTotals{
 		WireMs:     float64(wire.Microseconds()) / 1000,
-		InternalMs: float64((t.phases["op"] - wire).Microseconds()) / 1000,
+		InternalMs: float64((t.phases["open"] + t.phases["op"] - wire).Microseconds()) / 1000,
 		SentBytes:  sent,
 		RecvBytes:  recv,
 	}
