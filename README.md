@@ -534,8 +534,20 @@ mcp -i --command "npx -y @modelcontextprotocol/server-everything"
 no subcommand. The `mcp>` prompt and all errors go to stderr; results go to stdout.
 REPL commands: `help`, `tools`, `call NAME [JSON-OBJ] [--outfile FILE]`,
 `resources`, `read URI [--outfile FILE]`, `prompts`, `get NAME [JSON-OBJ]`, `info`,
-`ping`, `exit`/`quit`. In `--json` mode there is
+`ping`, `jev ask TEXT [--in-file …]`, `jev screen TEXT|--in-file …`,
+`jev verify --in-file claim=… evidence=…`, `exit`/`quit`. In `--json` mode there is
 no prompt and errors are `{"error":"…"}` documents on stderr.
+
+The jev lines cover the text-bearing forms: free text is the remaining tokens
+joined with single spaces (the REPL splits on whitespace, no quoting), and the
+same `--in-file [KEY=]PATH` slots as the one-shot commands fill
+`context=`/`evidence=`/`priorities=` (ask), `purpose=` (screen) and
+`claim=`/`evidence=` (verify, files only). Choice/score ask flags and
+`jev check` keep their quoting needs with the one-shot commands:
+
+```
+$ printf 'jev ask is 2+2=4?\njev screen --in-file purpose=code-review --in-file patch.diff\nexit\n' | mcp -i --command "npx -y @jkudish/jev-mcp"
+```
 
 In the REPL, `--timeout` is per command: each line runs under its own `--timeout` window
 (the connection is bounded once, at startup). Errors are printed and the loop continues;
@@ -584,8 +596,9 @@ when the provider rejects its key — the skipped battery is reported as data (s
   SEP-2575 discovery filtering (see [Protocol versions](#protocol-versions)).
 - No browser is ever launched: the loopback OAuth flow prints the URL for you to open in
   your own browser; use `--auth-flow manual` where no browser is available.
-- Jev: no REPL command (the REPL splits input on whitespace, so free-text
-  questions cannot reach it); legostin is detect-and-doctor only (its tools
+- Jev in the REPL covers the text-bearing forms only (`jev ask/screen/verify`
+  with free text and `--in-file` slots — choice/score ask flags and `jev check`
+  need quoting, so they stay one-shot); legostin is detect-and-doctor only (its tools
   drive Chrome and publish no schemas); the auth-class skip is a text
   heuristic — only recognized rejections/absences (401/402/403 token-bounded,
   "invalid/missing/no api key", payment/billing wording) skip, everything

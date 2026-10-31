@@ -145,7 +145,7 @@ func TestReplHelpListsCommands(t *testing.T) {
 	if stdout != "" {
 		t.Errorf("help stdout = %q, want empty (help goes to stderr)", stdout)
 	}
-	for _, want := range []string{"tools", "call NAME", "resources", "read URI", "prompts", "get NAME", "info", "ping", "exit", "quit", "quoting"} {
+	for _, want := range []string{"tools", "call NAME", "resources", "read URI", "prompts", "get NAME", "info", "ping", "jev ask", "jev screen", "jev verify", "exit", "quit", "quoting"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("help output %q does not mention %q", stderr, want)
 		}

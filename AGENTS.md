@@ -218,4 +218,8 @@ The REPL (`mcp -i --url ...`) holds one session open for many operations;
 the prompt goes to stderr and results to stdout, so piped stdout stays
 parseable. REPL commands: `help`, `tools`, `call NAME [JSON-OBJ] [--outfile FILE]`,
 `resources`, `read URI [--outfile FILE]`, `prompts`, `get NAME [JSON-OBJ]`, `info`,
-`ping`, `exit`/`quit`. Each line runs under its own `--timeout` window.
+`ping`, `jev ask TEXT [--in-file …]`, `jev screen TEXT|--in-file …`,
+`jev verify --in-file claim=… evidence=…`, `exit`/`quit`. Each line runs under
+its own `--timeout` window. jev free text is the remaining tokens joined with
+single spaces (no quoting in the REPL); `--in-file` slots work exactly as
+one-shot, except `-` (stdin is the REPL's own input and is rejected).
