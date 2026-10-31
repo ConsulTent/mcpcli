@@ -597,6 +597,10 @@ connect
 totals: wire 1.134s · internal 31ms · sent 498B · recv 23.9KB
 ```
 
+Rendered:
+
+![mcp --trace --verbose: the timing table with the boot row dominating the bar column](docs/screenshots/example-trace-table.png)
+
 The `boot` row is the connection handshake — on stdio it includes the
 server command's own startup (here `npx` resolving and booting the package,
 just over a second), because the child boots while the handshake waits.
