@@ -322,7 +322,7 @@ committed at
 and exercised by the test suite and CI:
 
 ```
-$ mcp --command "npx -y @jkudish/jev-mcp" jev screen \
+$ mcp --command "npx -y @jkudish/jev-mcp@0.14.7" jev screen \
     --in-file internal/cli/testdata/gutenberg-sample.txt --purpose "code review"
 read internal/cli/testdata/gutenberg-sample.txt (3894 bytes)
 ```

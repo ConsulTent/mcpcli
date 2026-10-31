@@ -79,7 +79,7 @@ skill: `/plugin marketplace add ConsulTent/mcpcli`.
 | `--json` | `false` | one JSON document on stdout, no decoration |
 | `--plain` | `false` | byte-ASCII output (no emoji/ANSI) |
 | `-i`, `--interactive` | `false` | line-based REPL (no subcommand) |
-| `--version` | | print `mcp version vX.Y.Z` |
+| `-v`, `--version` | | print `mcp version vX.Y.Z` |
 
 ### Commands (each example is the recipe)
 
@@ -198,13 +198,21 @@ mcp --command "npx -y @jkudish/jev-mcp" --json jev check --probe --probe-on-auth
 ```
 
 Diff-sized payloads (PR review, logs) never go through `--arg` — argv limits
-and JSON re-typing break on exactly the large inputs. Pipe them through jq
-into `-A -` instead, and stdin is consumed before any connection opens:
+and JSON re-typing break on exactly the large inputs. A single text value
+(one diff, one log, one message) rides `--in-file KEY=PATH` (recipes above);
+a composed multi-value JSON payload — several fields built from different
+sources — rides `jq -n | -A -`, and stdin is consumed before any connection
+opens:
 
 ```sh
-jq -n --rawfile diff pr.diff --arg request "$PR_TITLE" '{request: $request, diff: $diff}' \
+jq -n --rawfile diff pr.diff --arg request "$PR_TITLE" \
+  '{request: $request, diff: $diff, tests: "see the pull request checks"}' \
   | mcp --command "npx -y @jkudish/jev-mcp" --json --timeout 120s tools call jev_review -A -
 ```
+
+(The example workflows' request+diff pair now prefers
+`--in-file request=pr-request.txt --in-file diff=pr.diff`; the jq form stays
+for payloads no single text slot can carry.)
 
 The REPL (`mcp -i --url ...`) holds one session open for many operations;
 the prompt goes to stderr and results to stdout, so piped stdout stays
