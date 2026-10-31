@@ -8,7 +8,12 @@ name: release-build
 on:
   release:
     types: [published]
-  workflow_dispatch: {} # dress rehearsal: build+attest on GitHub; build-only under act
+  workflow_dispatch: # dress rehearsal: build+attest on GitHub; build-only under act
+    inputs:
+      tag:
+        description: mcpcli release tag to sync, e.g. v1.3.0
+        required: true
+        type: string
 
 permissions:
   contents: write # upload release assets
@@ -19,6 +24,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      act: ${{ env.ACT == 'true' }} # relay ACT to job-level if conditions (env is not allowed there)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
@@ -43,3 +50,97 @@ jobs:
         if: github.event_name == 'release' # never touch a real release from a smoke run
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # Bumps the Homebrew tap after a release: fetches the release's attested
+  # asset digests, edits Formula/mcpcli.rb, opens a PR and merges it when the
+  # tap's CI is green.
+  sync-homebrew-tap:
+    needs: build
+    # act cannot mint OIDC or hold a PAT. env is not reachable in job-level
+    # if, so the build job relays ACT (see its outputs).
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && needs.build.outputs.act != 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: {} # every write goes through the PAT
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ConsulTent/homebrew-tap
+          token: ${{ secrets.GH_PAT }} # persisted credentials carry the branch push
+      # an older-tag dispatch opens a downgrade PR - operator-guarded, visible, not auto-blocked
+      - name: Resolve tag
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="$DISPATCH_TAG"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::no tag to sync - pass the tag input on workflow_dispatch (e.g. v1.3.0)" >&2
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+      - name: Fetch release digests
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -o pipefail # a failed gh api must surface, not masquerade as missing digests
+          gh api "repos/ConsulTent/mcpcli/releases/tags/$TAG" --jq '.assets[] | select(.name | test("^mcp-(darwin|linux)-(amd64|arm64)$")) | .name + " " + .digest' \
+            | sed 's/ sha256:/ /' > "$RUNNER_TEMP/release-digests.txt"
+          cat "$RUNNER_TEMP/release-digests.txt"
+          missing=""
+          for asset in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
+            grep -q "^mcp-$asset " "$RUNNER_TEMP/release-digests.txt" || { echo "::error::release $TAG has no mcp-$asset digest" >&2; missing=1; }
+          done
+          [ -z "$missing" ] || exit 1
+      - name: Bump the formula URLs and digests
+        run: |
+          sed -i "s|releases/download/v[^/]*/|releases/download/$TAG/|" Formula/mcpcli.rb
+          for asset in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
+            digest=$(grep "^mcp-$asset " "$RUNNER_TEMP/release-digests.txt" | cut -d' ' -f2)
+            line=$(grep -n "releases/download/$TAG/mcp-$asset\"" Formula/mcpcli.rb | cut -d: -f1)
+            sed -i "$((line+1))s|sha256 \".*|sha256 \"$digest\"|" Formula/mcpcli.rb
+          done
+      # belt-and-braces with the job-level ACT relay: under act this proven
+      # step-level guard skips the step, so a local rehearsal holding a real
+      # GH_PAT still cannot push/PR against the live tap
+      - name: Open the bump PR
+        id: pr
+        if: env.ACT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          if git diff --quiet; then
+            echo "tap already at $TAG"
+            exit 0
+          fi
+          version="${TAG#v}"
+          owner_id=$(gh api user --jq .id)
+          owner_login=$(gh api user --jq .login)
+          git config user.name "$owner_login"
+          git config user.email "$owner_id-$owner_login@users.noreply.github.com"
+          git checkout -b "mcpcli-$TAG"
+          git add -A
+          git commit -m "mcpcli $version"
+          git push origin "mcpcli-$TAG"
+          pr_url=$(gh pr create -R ConsulTent/homebrew-tap --head "mcpcli-$TAG" --title "mcpcli $version" --body-file - <<BODY
+          Bump the mcpcli formula to $TAG with the digests of the release's attested mcp-<os>-<arch> assets.
+
+          This formula and pull request were prepared with AI assistance (ZCode, GLM). I reviewed and tested everything myself and will respond to feedback personally.
+          BODY
+          )
+          echo "number=${pr_url##*/}" >> "$GITHUB_OUTPUT"
+      - name: Watch checks and merge
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          for _ in $(seq 1 36); do
+            [ "$(gh pr view "$PR_NUMBER" -R ConsulTent/homebrew-tap --json statusCheckRollup --jq 'length')" -gt 0 ] && break
+            sleep 5
+          done
+          gh pr checks "$PR_NUMBER" -R ConsulTent/homebrew-tap --watch --fail-fast
+          gh pr merge "$PR_NUMBER" -R ConsulTent/homebrew-tap --squash --delete-branch
