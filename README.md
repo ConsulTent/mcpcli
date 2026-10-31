@@ -571,7 +571,41 @@ only `exit`, `quit`, or end of input leaves it.
 | `--timeout` | `30s` | timeout for network operations |
 | `--json` | `false` | machine-readable JSON output |
 | `--plain` | `false` | plain ASCII output, no emoji/colors/spinners |
+| `--trace` | `false` | per-call round-trip timing report on stderr (see [Round-trip timing](#round-trip-timing---trace)) |
+| `--verbose` | `false` | implies `--trace`; adds boot, client-internal time, and totals |
 | `-i`, `--interactive` | `false` | start the interactive REPL |
+
+## Round-trip timing (`--trace`)
+
+`--trace` prints a per-call timing report on stderr after the result — which
+call was slow, how much traffic each direction carried, and (with
+`--verbose`) where the time went: process boot vs wire vs mcp's own work.
+stdout is never touched, so pipes and `--json` parsing stay clean; in
+`--json` mode the report is one structured trace document on stderr
+(`rtt_ms`, `req_bytes`, `resp_bytes` per call). Real capture against the
+jkudish server over stdio:
+
+```
+$ mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --trace --verbose tools list
+connect
+┌───────────────┬──────┬────────────┬────┬──────┐
+│CALL           │TIME  │BAR         │SENT│RECV  │
+├───────────────┼──────┼────────────┼────┼──────┤
+│boot (discover)│1.091s│▓▓▓▓▓▓▓▓▓▓▓▓│249B│206B  │
+│tools/list     │13ms  │▓░░░░░░░░░░░│249B│23.7KB│
+└───────────────┴──────┴────────────┴────┴──────┘
+totals: wire 1.134s · internal 31ms · sent 498B · recv 23.9KB
+```
+
+The `boot` row is the connection handshake — on stdio it includes the
+server command's own startup (here `npx` resolving and booting the package,
+just over a second), because the child boots while the handshake waits.
+Bars scale against the run's slowest call. `--plain` swaps to an all-ASCII
+table without bars. `compat` gets one section per protocol probe. Traffic
+sizes are marshaled payload approximations (the few bytes of JSON-RPC frame
+overhead are not counted). Failed calls keep their row with a `❌` marker
+(`!` in `--plain`) and the error itself still reports through the normal
+error path.
 
 ## Exit codes
 

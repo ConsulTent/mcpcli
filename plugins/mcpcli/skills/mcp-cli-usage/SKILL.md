@@ -48,6 +48,8 @@ scripts and CI.
 | `--timeout` | `30s` | timeout for network operations |
 | `--json` | `false` | one JSON document on stdout, no decoration |
 | `--plain` | `false` | byte-ASCII output (no emoji/ANSI) |
+| `--trace` | `false` | per-call round-trip timing report on stderr; with `--json`, one trace JSON doc on stderr — stdout untouched |
+| `--verbose` | `false` | implies `--trace`; adds boot (handshake incl. server-command startup on stdio), client-internal time, totals |
 | `-i`, `--interactive` | `false` | line-based REPL (no subcommand) |
 | `-v`, `--version` | | print `mcp version vX.Y.Z` |
 

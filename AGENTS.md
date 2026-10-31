@@ -78,6 +78,8 @@ skill: `/plugin marketplace add ConsulTent/mcpcli`.
 | `--timeout` | `30s` | timeout for network operations |
 | `--json` | `false` | one JSON document on stdout, no decoration |
 | `--plain` | `false` | byte-ASCII output (no emoji/ANSI) |
+| `--trace` | `false` | per-call round-trip timing report on stderr; with `--json`, ONE trace JSON doc on stderr (`{phases, sections[].calls[]{method,rtt_ms,req_bytes,resp_bytes,err}, totals}`) — stdout stays the one result document |
+| `--verbose` | `false` | implies `--trace`; totals line adds wire vs client-internal time; the `boot` row is the handshake (on stdio: includes server-command startup, e.g. npx resolution) |
 | `-i`, `--interactive` | `false` | line-based REPL (no subcommand) |
 | `-v`, `--version` | | print `mcp version vX.Y.Z` |
 

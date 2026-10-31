@@ -296,4 +296,10 @@ jobs:
             mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
               jev screen --in-file internal/cli/testdata/gutenberg-sample.txt --purpose "ci smoke" \
               --json --timeout 60s | jq -e '.flavor == "jkudish" and .tool == "jev_screen"'
+            # --trace smoke: the trace doc lands on stderr while stdout
+            # stays the one result document (needs v1.3.3+).
+            mcp --command "npx -y @jkudish/jev-mcp@0.14.7" --trace --json --timeout 120s \
+              tools list 2>/tmp/trace.json >/tmp/result.json
+            jq -e '.sections[].calls[] | select(.method != "" and .rtt_ms >= 0)' /tmp/trace.json >/dev/null
+            jq -e '.tools | length > 0' /tmp/result.json >/dev/null
           fi
