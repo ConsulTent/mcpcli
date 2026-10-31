@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ConsulTent/mcpcli/internal/format"
+	"github.com/ConsulTent/mcpcli/internal/jev"
 	"github.com/ConsulTent/mcpcli/internal/ui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -35,11 +36,16 @@ const replHelp = `mcp REPL commands:
   get NAME [JSON-OBJ]                   get a prompt; JSON-OBJ fills its string arguments
   info                                  show the server's identity and capabilities
   ping                                  time a round trip to the server
+  jev ask TEXT [--in-file …]            ask a noul question (context=/evidence=/priorities= from files)
+  jev screen TEXT|--in-file …           screen a text for injection (purpose= from a file)
+  jev verify --in-file claim=… …        verify file claims against file evidence
   exit, quit                            leave the REPL
 
 Input is split on whitespace like shell words; quoting is not supported, so
-JSON-OBJ must be one whitespace-free JSON object and an --outfile path cannot
-contain spaces, e.g. call echo {"msg":"hi"}.`
+JSON-OBJ must be one whitespace-free JSON object and an --outfile or --in-file
+path cannot contain spaces, e.g. call echo {"msg":"hi"}. jev free text is the
+remaining tokens joined with single spaces; the one-shot commands carry the
+quoting-needing forms (choice/score ask flags, jev check).`
 
 // runRepl runs the line-based interactive REPL against an already-open
 // session: the caller (the -i wiring in root.go) owns the connection, the
@@ -106,6 +112,8 @@ func replCommand(ctx context.Context, fields []string, out, errOut io.Writer, s 
 		err = opInfo(s, out)
 	case "ping":
 		err = opPing(ctx, s, out)
+	case "jev":
+		err = replJev(ctx, fields, out, errOut, s)
 	default:
 		if ui.Current == ui.JSON {
 			err = errors.New(replUnknownCommand)
@@ -199,6 +207,118 @@ func replGet(ctx context.Context, fields []string, out io.Writer, s *mcp.ClientS
 		}
 	}
 	return opGetPrompt(ctx, s, fields[1], args, out)
+}
+
+// splitInFiles pulls every --in-file [KEY=]PATH pair anywhere in the token
+// list: matched pairs are removed from the returned rest, a --in-file with
+// no following token is an error, and "-" is rejected — stdin is the REPL's
+// own input stream. Unknown tokens pass through untouched for the caller.
+func splitInFiles(fields []string) (rest, specs []string, err error) {
+	rest = make([]string, 0, len(fields))
+	for i := 0; i < len(fields); i++ {
+		if fields[i] != "--in-file" {
+			rest = append(rest, fields[i])
+			continue
+		}
+		if i+1 >= len(fields) {
+			return nil, nil, errors.New("--in-file requires a value")
+		}
+		if fields[i+1] == "-" {
+			return nil, nil, errors.New(`--in-file "-" is not available in the REPL: stdin is the REPL's own input`)
+		}
+		specs = append(specs, fields[i+1])
+		i++
+	}
+	return rest, specs, nil
+}
+
+// replJev mirrors the text-bearing jev commands inside the open session:
+// ask and screen take their primary text as the remaining tokens joined
+// with single spaces (the Fields split collapses whitespace runs) or a bare
+// --in-file PATH, with the same in-file slots as the one-shot commands;
+// verify takes claim=/evidence= files only — its repeatable slots cannot be
+// free text without quoting. Choice/score ask flags and jev check stay with
+// the one-shot commands.
+func replJev(ctx context.Context, fields []string, out, errOut io.Writer, s *mcp.ClientSession) error {
+	if len(fields) < 2 {
+		return errors.New("usage: jev ask TEXT|--in-file … | screen TEXT|--in-file … | verify --in-file claim=… evidence=…")
+	}
+	rest, specs, err := splitInFiles(fields[2:])
+	if err != nil {
+		return err
+	}
+	text := strings.Join(rest, " ")
+	switch strings.ToLower(fields[1]) {
+	case "ask":
+		parsed, err := parseInFiles(specs, jevAskInFileKeys, true)
+		if err != nil {
+			return err
+		}
+		primary, vals, err := applyInFiles(parsed, nil, errOut)
+		if err != nil {
+			return err
+		}
+		if primary != "" && text != "" {
+			return errors.New("TEXT and --in-file are mutually exclusive")
+		}
+		if text == "" {
+			text = primary // raw file content: no trimming
+		}
+		if strings.TrimSpace(text) == "" {
+			return errors.New("ask requires a non-empty question (text or --in-file)")
+		}
+		q := jev.Question{
+			Text:       text,
+			Context:    lastInFile(vals, "context"),
+			Evidence:   inFileValues(vals, "evidence"),
+			Priorities: lastInFile(vals, "priorities"),
+		}
+		return runJevOp(ctx, s, out, errOut, jev.OpKindNoul, q, nil)
+	case "screen":
+		parsed, err := parseInFiles(specs, jevScreenInFileKeys, true)
+		if err != nil {
+			return err
+		}
+		primary, vals, err := applyInFiles(parsed, nil, errOut)
+		if err != nil {
+			return err
+		}
+		if primary != "" && text != "" {
+			return errors.New("TEXT and --in-file are mutually exclusive")
+		}
+		if text == "" {
+			text = primary // raw file content: no trimming
+		}
+		if strings.TrimSpace(text) == "" {
+			return errors.New("screen requires a non-empty text (text or --in-file)")
+		}
+		q := jev.Question{Text: text, Purpose: lastInFile(vals, "purpose")}
+		return runJevOp(ctx, s, out, errOut, jev.OpKindScreen, q, nil)
+	case "verify":
+		if strings.TrimSpace(text) != "" {
+			return errors.New("verify takes no free text in the REPL: use --in-file claim=… and --in-file evidence=…")
+		}
+		parsed, err := parseInFiles(specs, jevVerifyInFileKeys, false)
+		if err != nil {
+			return err
+		}
+		_, vals, err := applyInFiles(parsed, nil, errOut)
+		if err != nil {
+			return err
+		}
+		claims := inFileValues(vals, "claim")
+		evidence := inFileValues(vals, "evidence")
+		if len(claims) == 0 {
+			return errors.New("verify requires at least one --in-file claim=…")
+		}
+		if len(evidence) == 0 {
+			return errors.New("verify requires at least one --in-file evidence=…")
+		}
+		q := jev.Question{Claims: claims, Evidence: evidence}
+		return runJevOp(ctx, s, out, errOut, jev.OpKindVerify, q, nil)
+	default:
+		return errors.New("usage: jev ask TEXT|--in-file … | screen TEXT|--in-file … | verify --in-file claim=… evidence=…")
+	}
 }
 
 // replJSONObject decodes one whitespace-free JSON object token into tool
