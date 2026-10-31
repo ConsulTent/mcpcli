@@ -101,6 +101,7 @@ jobs:
           for asset in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
             digest=$(grep "^mcp-$asset " "$RUNNER_TEMP/release-digests.txt" | cut -d' ' -f2)
             line=$(grep -n "releases/download/$TAG/mcp-$asset\"" Formula/mcpcli.rb | cut -d: -f1)
+            [ -n "$line" ] || { echo "::error::mcp-$asset URL line not found in Formula/mcpcli.rb - formula shape changed?"; exit 1; }
             sed -i "$((line+1))s|sha256 \".*|sha256 \"$digest\"|" Formula/mcpcli.rb
           done
       # belt-and-braces with the job-level ACT relay: under act this proven
