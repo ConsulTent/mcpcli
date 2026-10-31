@@ -332,6 +332,32 @@ the verdict line is the same `screen pass · …` shape shown above — the
 [jev-capture](https://github.com/ConsulTent/mcpcli/actions/workflows/jev-capture.yml)
 workflow captures this exact command's live answer.
 
+`--in-file` combines with the existing text flags: files carry the big
+payloads, flags the short ones. An explicit flag beats a file for the same
+slot, and `evidence=`/`claim=` files append after the flag values:
+
+```
+mcp --command "npx -y @jkudish/jev-mcp" jev ask "is the build green?" \
+  --context "release checklist, staging environment" --in-file evidence=ci.log
+mcp --command "npx -y @jkudish/jev-mcp" jev verify \
+  --in-file claim=claim.txt --in-file evidence=test-output.log
+mcp --command "npx -y @jkudish/jev-mcp" jev verify \
+  --claim "no regressions" --in-file evidence=pr.diff --in-file evidence=ci.log
+mcp --command "npx -y @jkudish/jev-mcp" jev ask "ship or hold?" \
+  --opt ship --opt hold --priorities "ship confidently when green" \
+  --in-file evidence=release-notes.md
+mcp --url "https://mcp.example.com/mcp" tools call jev_review \
+  -A defaults.json --in-file diff=pr.diff --arg request="final check before tagging"
+mcp --url "https://mcp.example.com/mcp" prompts get svelte-task \
+  --in-file task=issue-body.md --arg language=Svelte
+```
+
+The `verify` pair shows both shapes: claims and evidence entirely from
+files, or a short `--claim` on the command line with the evidence files
+appending after it. The `tools call` line shows all three argument
+sources in one command — `-A` JSON object first, `--in-file` raw text
+second, `--arg` pairs overriding last.
+
 Real outputs against the live jkudish server (captured 2026-10-30 by this
 repository's [jev-capture](https://github.com/ConsulTent/mcpcli/actions/workflows/jev-capture.yml)
 workflow; probabilities are the model's live answers and vary per call):
