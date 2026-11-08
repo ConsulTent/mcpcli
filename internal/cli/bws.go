@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
-	"github.com/ConsulTent/mcpcli/internal/auth"
 	"github.com/ConsulTent/mcpcli/internal/bws"
 	"github.com/ConsulTent/mcpcli/internal/format"
 	"github.com/ConsulTent/mcpcli/internal/ui"
@@ -148,11 +146,11 @@ func newBWSLoginCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 			// identity server only.
 			client := bws.NewClient(normAPI, normIdentity, token, orgID)
 			if _, err := client.Exchange(ctx); err != nil {
-				// internal/bws is frozen: its 401 branch is the only error
-				// carrying this status phrase. At login the actionable knob
-				// is the exchange target being validated, so the runtime
-				// re-login pointer gets the --identity-url tail.
-				if strings.Contains(err.Error(), "rejected with 401") {
+				// The 401 sentinel (errors.Is, not a string match on the
+				// unioned message — its text is golden-pinned). At login the
+				// actionable knob is the exchange target being validated, so
+				// the runtime re-login pointer gets the --identity-url tail.
+				if errors.Is(err, bws.ErrUnauthorized) {
 					return fmt.Errorf("%w\nbws login: check --identity-url (%s): it must be the identity server of the same instance as --api-url", err, normIdentity)
 				}
 				return fmt.Errorf("bws login: validating the token: %w", err)
@@ -218,38 +216,13 @@ func bwsWarnPlainHTTP(w io.Writer, flag, rawURL string) {
 	}
 }
 
-// bwsCredentialCacheFile is the credential cache file name internal/bws
-// writes (its own constant is unexported).
-const bwsCredentialCacheFile = "bws.json"
-
-// bwsCachedCredentials lists the cached credentials for logout's offline
-// truth table. internal/bws exposes no env-free enumeration — its
-// ResolveCredential consults MCPCLI_BWS_API_URL, which logout must ignore —
-// so logout reads the same cache file through the exported
-// auth.ReadCacheFile primitive and renders the stored APIURL values itself
-// (the sha256 keying is not needed: only values are read). Reported to the
-// planner as a missing accessor: an exported bws listing would remove this
-// reader.
-func bwsCachedCredentials() ([]bws.Credential, error) {
-	creds := map[string]bws.Credential{}
-	found, err := auth.ReadCacheFile(bwsCredentialCacheFile, &creds)
-	if err != nil {
-		return nil, err
-	}
-	if !found || len(creds) == 0 {
-		return nil, nil
-	}
-	out := make([]bws.Credential, 0, len(creds))
-	for _, cred := range creds {
-		out = append(out, cred)
-	}
-	return out, nil
-}
-
 // newBWSLogoutCommand builds "bws logout": delete one cached instance login.
 // Strictly offline — the cache is keyed by API URL, so no connection is made
-// and none is needed. MCPCLI_BWS_API_URL is ignored here: the env selects
-// credentials for the reading verbs, it is not a cache target.
+// and none is needed. The truth table rides internal/bws's exported surface
+// only: CachedInstances enumerates (env-free, sorted) and DeleteCredential
+// removes; no cache-file detail reaches this package. MCPCLI_BWS_API_URL is
+// ignored here: the env selects credentials for the reading verbs, it is not
+// a cache target.
 func newBWSLogoutCommand(f *bwsFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
@@ -258,20 +231,20 @@ func newBWSLogoutCommand(f *bwsFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			errOut := cmd.ErrOrStderr()
 
-			cached, err := bwsCachedCredentials()
+			urls, err := bws.CachedInstances()
 			if err != nil {
 				return err
 			}
-			if len(cached) == 0 {
+			if len(urls) == 0 {
 				// Idempotent: forgetting nothing is a successful logout.
 				ui.Success(errOut, "logged out (no Bitwarden instance was cached)")
 				return nil
 			}
 			if flag := f.apiURL; flag != "" {
-				// Membership probe through the exported reader: the flag
+				// Membership probe through the exported resolver: the flag
 				// beats MCPCLI_BWS_API_URL there, and its miss error names
-				// the cached instances (the client's sortedCachedURLs
-				// listing) — fail-closed, never a silent no-op delete.
+				// the cached instances — fail-closed, never a silent no-op
+				// delete.
 				cred, err := bws.ResolveCredential(flag)
 				if err != nil {
 					return err
@@ -282,18 +255,13 @@ func newBWSLogoutCommand(f *bwsFlags) *cobra.Command {
 				ui.Success(errOut, "logged out of %s", cred.APIURL)
 				return nil
 			}
-			if len(cached) > 1 {
-				urls := make([]string, 0, len(cached))
-				for _, cred := range cached {
-					urls = append(urls, cred.APIURL)
-				}
-				slices.Sort(urls)
-				return fmt.Errorf("bws logout: %d Bitwarden instances are cached (%s); pass --api-url to choose the instance to forget", len(cached), strings.Join(urls, ", "))
+			if len(urls) > 1 {
+				return fmt.Errorf("bws logout: %d Bitwarden instances are cached (%s); pass --api-url to choose the instance to forget", len(urls), strings.Join(urls, ", "))
 			}
-			if _, err := bws.DeleteCredential(cached[0].APIURL); err != nil {
+			if _, err := bws.DeleteCredential(urls[0]); err != nil {
 				return err
 			}
-			ui.Success(errOut, "logged out of %s", cached[0].APIURL)
+			ui.Success(errOut, "logged out of %s", urls[0])
 			return nil
 		},
 	}
@@ -449,10 +417,13 @@ func newBWSGetCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 
 			// Ref-shape validation precedes credential resolution: a
 			// bws://-shaped ref is the --env/--client-secret grammar and
-			// fails closed before any cache lookup or network.
+			// fails closed before any cache lookup or network. The scheme
+			// segment matches in ANY letter case (EqualFold, the Resolver's
+			// dispatch rule): "BWS://x" expands on the --env side, so it
+			// must get the same bare-ref remediation.
 			for _, ref := range args {
-				if strings.HasPrefix(ref, "bws://") {
-					return fmt.Errorf("bws: secret %q: pass the bare ref %q; the bws:// form belongs to --env values and --client-secret, not to the bws verbs", ref, strings.TrimPrefix(ref, "bws://"))
+				if scheme, bare, found := strings.Cut(ref, "://"); found && strings.EqualFold(scheme, "bws") {
+					return fmt.Errorf("bws: secret %q: pass the bare ref %q; the bws:// form belongs to --env values and --client-secret, not to the bws verbs", ref, bare)
 				}
 			}
 

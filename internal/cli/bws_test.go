@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -65,9 +66,10 @@ func bwsTestTokenDir(t *testing.T) {
 // known-answer exchange envelope (decryptable by any token carrying the
 // pinned seed) and counting hits.
 type bwsTestIdentity struct {
-	mu   sync.Mutex
-	url  string
-	hits int
+	mu     sync.Mutex
+	url    string
+	hits   int
+	status int // forced response status; 0 serves the known-answer envelope
 }
 
 func newBWSTestIdentity(t *testing.T) *bwsTestIdentity {
@@ -77,7 +79,12 @@ func newBWSTestIdentity(t *testing.T) *bwsTestIdentity {
 	mux.HandleFunc("POST /connect/token", func(w http.ResponseWriter, r *http.Request) {
 		fi.mu.Lock()
 		fi.hits++
+		status := fi.status
 		fi.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"access_token":%q,"encrypted_payload":%q}`, "cli-test-jwt", bwsTestEncPayload)
 	})
@@ -85,6 +92,13 @@ func newBWSTestIdentity(t *testing.T) *bwsTestIdentity {
 	t.Cleanup(srv.Close)
 	fi.url = srv.URL
 	return fi
+}
+
+// forceStatus makes every exchange answer with the given status.
+func (fi *bwsTestIdentity) forceStatus(status int) {
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	fi.status = status
 }
 
 func (fi *bwsTestIdentity) exchangeHits() int {
@@ -426,6 +440,67 @@ func TestBWSLoginHTTPWarns(t *testing.T) {
 	if !strings.Contains(stderr, "--identity-url is plain http://") {
 		t.Errorf("login stderr %q lacks the --identity-url http warning", stderr)
 	}
+}
+
+// TestBWSLogin401SentinelTail pins the login 401 path: the error wraps
+// bws.ErrUnauthorized through the whole CLI chain (errors.Is, not a string
+// match on the unioned message) and carries the --identity-url tail naming
+// the actionable login knob; nothing is cached on the failed validation.
+func TestBWSLogin401SentinelTail(t *testing.T) {
+	bwsTestTokenDir(t)
+	fi := newBWSTestIdentity(t)
+	fa := newBWSTestAPI(t, bwsTestOrgKey(t), map[string]bws.Secret{})
+	fi.forceStatus(http.StatusUnauthorized)
+
+	_, _, _, err := runRoot(t, "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
+	if err == nil {
+		t.Fatal("login against a 401 identity server: nil error")
+	}
+	if !errors.Is(err, bws.ErrUnauthorized) {
+		t.Errorf("login 401 error does not wrap bws.ErrUnauthorized: %v", err)
+	}
+	if !strings.Contains(err.Error(), "check --identity-url") || !strings.Contains(err.Error(), fi.url) {
+		t.Errorf("error %q lacks the --identity-url tail naming the instance", err)
+	}
+	if _, err := bws.ResolveCredential(""); err == nil {
+		t.Error("failed login cached a credential")
+	}
+}
+
+// TestBWSLoginNoOrgStateVariants pins the no-org login state's two
+// spellings: the em-dash line in Rich and the ASCII-hyphen line in --plain
+// (the byte-ASCII contract applies to this string too) — never the other
+// variant in either mode.
+func TestBWSLoginNoOrgStateVariants(t *testing.T) {
+	bwsTestTokenDir(t)
+	fi := newBWSTestIdentity(t)
+	fa := newBWSTestAPI(t, bwsTestOrgKey(t), map[string]bws.Secret{})
+	const richLine = "no org — name refs disabled"  // em dash
+	const plainLine = "no org - name refs disabled" // ASCII hyphen
+
+	// Rich (default mode).
+	stderr := bwsTestLogin(t, fa.url, fi.url) // no --org
+	if !strings.Contains(stderr, richLine) {
+		t.Errorf("rich login stderr %q lacks the em-dash no-org line", stderr)
+	}
+	if strings.Contains(stderr, plainLine) {
+		t.Errorf("rich login stderr %q carries the plain variant", stderr)
+	}
+
+	// --plain: the ASCII variant, zero non-ASCII anywhere.
+	stdout, stderr, dec, err := runRoot(t, "--plain", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
+	if err != nil {
+		t.Fatalf("plain login: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stderr, plainLine) {
+		t.Errorf("plain login stderr %q lacks the ASCII no-org line", stderr)
+	}
+	if strings.Contains(stderr, richLine) {
+		t.Errorf("plain login stderr %q carries the em-dash variant", stderr)
+	}
+	bwsTestAssertASCII(t, "plain login stdout", stdout)
+	bwsTestAssertASCII(t, "plain login stderr", stderr)
+	bwsTestAssertASCII(t, "plain login decoration", dec)
 }
 
 // --- logout ---
@@ -841,6 +916,21 @@ func TestBWSGetRefShapedRefGolden(t *testing.T) {
 	}
 	if !strings.Contains(msg, "--env") {
 		t.Errorf("error %q lacks the bws://-grammar pointer", msg)
+	}
+
+	// The scheme segment matches in ANY letter case (RFC 3986 — the secret
+	// Resolver lowercases before dispatch, so "BWS://x" expands on the
+	// --env side and must not slip past this remediation).
+	_, _, _, err = runRoot(t, "bws", "get", "BWS://name")
+	if err == nil {
+		t.Fatal("bws get with a BWS://-shaped ref: nil error")
+	}
+	msg = err.Error()
+	if !strings.Contains(msg, "BWS://name") || !strings.Contains(msg, `"name"`) {
+		t.Fatalf("error %q does not name the ref and its bare form", msg)
+	}
+	if !strings.Contains(msg, "bare ref") {
+		t.Errorf("error %q is not the bare-ref remediation", msg)
 	}
 }
 

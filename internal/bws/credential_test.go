@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -265,6 +266,65 @@ func TestDeleteCredential(t *testing.T) {
 	if err != nil || deleted {
 		t.Errorf("repeated DeleteCredential = (%v, %v), want (false, nil)", deleted, err)
 	}
+}
+
+// TestCachedInstances pins the exported enumeration logout rides: the
+// cached instances' normalized API URLs, sorted, env-free (unlike
+// ResolveCredential, MCPCLI_BWS_API_URL never selects anything here), empty
+// on an empty cache and an error on a corrupt one.
+func TestCachedInstances(t *testing.T) {
+	t.Run("empty cache yields an empty list", func(t *testing.T) {
+		useTempTokenDir(t)
+		got, err := CachedInstances()
+		if err != nil {
+			t.Fatalf("CachedInstances: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("CachedInstances() = %v, want empty", got)
+		}
+	})
+
+	t.Run("lists normalized urls sorted", func(t *testing.T) {
+		useTempTokenDir(t)
+		for _, host := range []string{"zeta.test", "alpha.test"} {
+			if err := SaveCredential(dummyCredential(t, host)); err != nil {
+				t.Fatalf("SaveCredential(%s): %v", host, err)
+			}
+		}
+		got, err := CachedInstances()
+		if err != nil {
+			t.Fatalf("CachedInstances: %v", err)
+		}
+		want := []string{"https://alpha.test", "https://zeta.test"}
+		if !slices.Equal(got, want) {
+			t.Errorf("CachedInstances() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("ignores the env selector", func(t *testing.T) {
+		useTempTokenDir(t)
+		if err := SaveCredential(dummyCredential(t, "one.test")); err != nil {
+			t.Fatalf("SaveCredential: %v", err)
+		}
+		t.Setenv("MCPCLI_BWS_API_URL", "https://elsewhere.test")
+		got, err := CachedInstances()
+		if err != nil {
+			t.Fatalf("CachedInstances: %v", err)
+		}
+		if len(got) != 1 || got[0] != "https://one.test" {
+			t.Errorf("CachedInstances() = %v, want the one cached URL regardless of env", got)
+		}
+	})
+
+	t.Run("corrupt cache errors", func(t *testing.T) {
+		useTempTokenDir(t)
+		if err := os.WriteFile(credentialCachePath(), []byte("{invalid"), 0o600); err != nil {
+			t.Fatalf("write corrupt bws.json: %v", err)
+		}
+		if _, err := CachedInstances(); err == nil {
+			t.Fatal("corrupt bws.json: nil error")
+		}
+	})
 }
 
 // TestNullContentCachePinsReInit pins the nil-map re-init: a bws.json

@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -507,6 +508,50 @@ func TestDecryptEncStringShapeErrors(t *testing.T) {
 	})
 }
 
+// TestDecryptEncStringBoundedEcho pins that shape errors never echo a
+// server-controlled EncString unbounded: a malformed string of arbitrary
+// length surfaces only as a bounded prefix carrying the ...(truncated)
+// marker, so the long tail never reaches errors or logs (the siblings'
+// discipline — they echo only the observed type prefix).
+func TestDecryptEncStringBoundedEcho(t *testing.T) {
+	encKey := unhex(t, kaOKHex)[:32]
+	macKey := unhex(t, kaOKHex)[32:]
+	head := strings.Repeat("A", 500)
+	tail := "TAIL-MARKER-NEVER-IN-ERRORS"
+
+	t.Run("no type prefix", func(t *testing.T) {
+		_, err := decryptEncString(EncString(head+tail), encKey, macKey)
+		if err == nil {
+			t.Fatal("long dot-less string: nil error")
+		}
+		assertBoundedEcho(t, err, tail)
+	})
+
+	t.Run("unsupported type prefix", func(t *testing.T) {
+		_, err := decryptEncString(EncString(head+"."+tail+"|x|y"), encKey, macKey)
+		if err == nil {
+			t.Fatal("long wrong-type string: nil error")
+		}
+		assertBoundedEcho(t, err, tail)
+	})
+}
+
+// assertBoundedEcho fails the test when err echoes the long tail, lacks the
+// truncation marker, or is itself unbounded.
+func assertBoundedEcho(t *testing.T, err error, tail string) {
+	t.Helper()
+	msg := err.Error()
+	if strings.Contains(msg, tail) {
+		t.Errorf("error echoes the long tail: %d bytes, ends %q", len(msg), msg[min(len(msg), 40):])
+	}
+	if !strings.Contains(msg, "...(truncated)") {
+		t.Errorf("error %q lacks the truncation marker", msg)
+	}
+	if len(msg) > 512 {
+		t.Errorf("error is %d bytes; the echoed string is not bounded", len(msg))
+	}
+}
+
 func TestNormalizeURL(t *testing.T) {
 	cases := []struct {
 		name string
@@ -741,6 +786,15 @@ func TestExchange401UnionedMessage(t *testing.T) {
 	if strings.Contains(err.Error(), tok) {
 		t.Error("401 error contains the access token")
 	}
+	// The sentinel: callers match 401s with errors.Is, never by string.
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Error("401 error does not wrap ErrUnauthorized")
+	}
+	// The unioned message stays byte-identical (goldens and docs quote it).
+	want := fmt.Sprintf(`bws: the access token was rejected with 401 by the identity server %s: the token may be stale or rotated, or the identity URL may point at a different instance; re-run "mcp bws login"`, fi.url)
+	if err.Error() != want {
+		t.Errorf("401 message =\n%q\nwant\n%q", err.Error(), want)
+	}
 }
 
 func TestExchangeNon2xxBoundedBody(t *testing.T) {
@@ -760,6 +814,10 @@ func TestExchangeNon2xxBoundedBody(t *testing.T) {
 	}
 	if len(err.Error()) > 4200 { // status text + up to 4096 body bytes + wrapper
 		t.Errorf("error is %d bytes; the body is not bounded at 4 KiB", len(err.Error()))
+	}
+	// The sentinel is 401-only: a 500 must not match it.
+	if errors.Is(err, ErrUnauthorized) {
+		t.Error("500 error wraps ErrUnauthorized; the sentinel is 401-only")
 	}
 }
 

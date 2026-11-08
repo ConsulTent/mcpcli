@@ -150,6 +150,21 @@ type SecretUpdateRequest struct {
 // connection package's maxStderrBytes pattern.
 const maxDiagBytes = 4096
 
+// maxEchoChars bounds how much of a server-controlled string an error
+// echoes: enough prefix to identify the shape failure, never the whole
+// value (the same bounded-diagnostics discipline at error scale).
+const maxEchoChars = 64
+
+// boundedEcho returns s's first maxEchoChars bytes, marked "...(truncated)"
+// past that — the connection package's marker. A server-controlled string
+// (an EncString of unknown shape) must never reach errors or logs unbounded.
+func boundedEcho(s string) string {
+	if len(s) <= maxEchoChars {
+		return s
+	}
+	return s[:maxEchoChars] + "...(truncated)"
+}
+
 // Client is a thin BWS REST client for one instance. It is deliberately
 // single-goroutine per run: the exchange memo below is a plain field, not a
 // sync.Once, and a Client (or its wrapping Source) must not be shared
@@ -212,6 +227,24 @@ func (c *Client) tokenGate() error {
 	return nil
 }
 
+// ErrUnauthorized is the sentinel wrapped by every Exchange 401 error: the
+// identity server rejected the machine-account token. Callers match it with
+// errors.Is — never by string-matching the unioned message, whose text is
+// pinned by goldens and docs and must stay verbatim.
+var ErrUnauthorized = errors.New("bws: unauthorized")
+
+// unauthorizedError is Exchange's 401: the runtime unioned message (naming
+// the identity server and both possible causes) wrapping ErrUnauthorized.
+// Error() is byte-identical to the message the sentinel replaced, so goldens
+// and docs quoting it stay green.
+type unauthorizedError struct{ identityURL string }
+
+func (e *unauthorizedError) Error() string {
+	return fmt.Sprintf("bws: the access token was rejected with 401 by the identity server %s: the token may be stale or rotated, or the identity URL may point at a different instance; re-run \"mcp bws login\"", e.identityURL)
+}
+
+func (e *unauthorizedError) Unwrap() error { return ErrUnauthorized }
+
 // Exchange performs the client-credentials exchange against the identity
 // server: POST {identity}/connect/token with form-encoded
 // grant_type/client_id/client_secret/scope. A 401 carries the runtime
@@ -240,7 +273,7 @@ func (c *Client) Exchange(ctx context.Context) (*TokenResponse, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("bws: the access token was rejected with 401 by the identity server %s: the token may be stale or rotated, or the identity URL may point at a different instance; re-run \"mcp bws login\"", c.identityURL)
+		return nil, &unauthorizedError{identityURL: c.identityURL}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		diag, _ := io.ReadAll(io.LimitReader(resp.Body, maxDiagBytes))
@@ -290,10 +323,10 @@ func decryptEncString(enc EncString, encKey, macKey []byte) (string, error) {
 	s := string(enc)
 	typePrefix, rest, found := strings.Cut(s, ".")
 	if !found {
-		return "", fmt.Errorf("bws: encrypted string %q has no type prefix", s)
+		return "", fmt.Errorf("bws: encrypted string %q has no type prefix", boundedEcho(s))
 	}
 	if typePrefix != "2" {
-		return "", fmt.Errorf("bws: encrypted string has unsupported type prefix %q (want 2)", typePrefix)
+		return "", fmt.Errorf("bws: encrypted string has unsupported type prefix %q (want 2)", boundedEcho(typePrefix))
 	}
 	parts := strings.Split(rest, "|")
 	if len(parts) != 3 {

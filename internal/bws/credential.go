@@ -114,6 +114,21 @@ func DeleteCredential(apiURL string) (bool, error) {
 	return true, nil
 }
 
+// CachedInstances returns the normalized API URLs of every cached instance
+// login, sorted — the offline enumeration logout's truth table rides (zero,
+// one or many cached instances). Deliberately env-free: unlike
+// ResolveCredential it never consults MCPCLI_BWS_API_URL, because the env
+// selects credentials for the reading verbs, it is not a cache target.
+func CachedInstances() ([]string, error) {
+	credentialMu.Lock()
+	defer credentialMu.Unlock()
+	creds, err := loadCredentials()
+	if err != nil {
+		return nil, err
+	}
+	return sortedCachedURLs(creds), nil
+}
+
 // ResolveCredential resolves the Bitwarden instance to use, consult-in-order:
 // the --api-url flag beats the MCPCLI_BWS_API_URL environment variable beats
 // the cache. An empty flag slot is UNSET, not invalid (the expansion path
