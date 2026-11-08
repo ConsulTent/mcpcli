@@ -135,7 +135,7 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 	// of opening a server session, so it imposes no connection flags.
 	// compat opens its own pinned sessions and ignores auth; jev check opens
 	// its own session but honors auth.
-	cmd.AddCommand(newAuthCommand(g), newInfoCommand(), newPingCommand(), newCompatCommand(), newToolsCommand(), newResourcesCommand(), newPromptsCommand(), newJevCommand())
+	cmd.AddCommand(newAuthCommand(g), newBWSCommand(g), newInfoCommand(), newPingCommand(), newCompatCommand(), newToolsCommand(), newResourcesCommand(), newPromptsCommand(), newJevCommand())
 
 	return cmd
 }
