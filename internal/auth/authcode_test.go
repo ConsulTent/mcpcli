@@ -7,12 +7,35 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ConsulTent/mcpcli/internal/ui"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
+
+// lockedBuffer is a mutex-guarded bytes.Buffer for stderr captured from a
+// fetcher goroutine while the test goroutine polls it (CI -race finding in
+// TestAuthorizeAtPrintedInJSONMode: the loopback fetcher's authorizeAt write
+// raced the poll loop's String reads). Same discipline as connection.go's
+// stderrBuffer, which guards the exec copy goroutine the same way.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // fetchOutcome carries one AuthorizationCodeFetcher invocation's result across
 // a goroutine boundary in tests.
@@ -215,7 +238,9 @@ func TestAuthorizeAtPrintedInJSONMode(t *testing.T) {
 	}
 
 	// Loopback fetcher: the URL line appears as soon as the flow starts.
-	var loopbackErr bytes.Buffer
+	// The fetcher goroutine writes authorizeAt output while this goroutine
+	// polls for it, so the buffer must be synchronized.
+	var loopbackErr lockedBuffer
 	fetcher, _, closeFn, err := newLoopbackFetcher(context.Background(), &loopbackErr)
 	if err != nil {
 		t.Fatalf("newLoopbackFetcher: %v", err)
