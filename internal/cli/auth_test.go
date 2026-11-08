@@ -41,7 +41,11 @@ func runAuthCommand(stdin io.Reader, args ...string) (string, error) {
 //	/.well-known/oauth-protected-resource   -> PRM doc naming the authorization server
 //	/.well-known/oauth-authorization-server -> AS metadata with the token endpoint
 //	/token                                  -> authorization-code token endpoint
-func newFakeIdPServer(t *testing.T, access, wantCode, wantRedirect string) (srvURL string, tokenHits, authedHits *atomic.Int32) {
+//
+// wantSecret, when non-empty, is the confidential client's client_secret the
+// token endpoint demands to see (Basic auth or form — oauth2 auto-detect
+// tries Basic first).
+func newFakeIdPServer(t *testing.T, access, wantCode, wantRedirect, wantSecret string) (srvURL string, tokenHits, authedHits *atomic.Int32) {
 	t.Helper()
 
 	var urlHolder atomic.Value // string, set once the server URL is known
@@ -99,12 +103,16 @@ func newFakeIdPServer(t *testing.T, access, wantCode, wantRedirect string) (srvU
 			t.Errorf("redirect_uri = %q, want %q", got, wantRedirect)
 		}
 		// oauth2 auto-detect starts with Basic auth; accept either style.
-		gotID, _, ok := r.BasicAuth()
+		gotID, gotSecret, ok := r.BasicAuth()
 		if !ok {
 			gotID = r.FormValue("client_id")
+			gotSecret = r.FormValue("client_secret")
 		}
 		if gotID != "test-client-id" {
 			t.Errorf("client_id = %q, want %q", gotID, "test-client-id")
+		}
+		if wantSecret != "" && gotSecret != wantSecret {
+			t.Errorf("client_secret = %q, want %q", gotSecret, wantSecret)
 		}
 		tokenHits.Add(1)
 		writeJSON(w, map[string]any{"access_token": access, "token_type": "Bearer"})
@@ -126,7 +134,7 @@ func TestAuthLoginSavesToken(t *testing.T) {
 		code   = "test-auth-code"
 	)
 
-	target, tokenHits, authedHits := newFakeIdPServer(t, access, code, "http://127.0.0.1:1/callback")
+	target, tokenHits, authedHits := newFakeIdPServer(t, access, code, "http://127.0.0.1:1/callback", "")
 
 	t.Setenv("MCPCLI_CLIENT_ID", "test-client-id")
 	t.Setenv("MCPCLI_CLIENT_SECRET", "dummy-secret")

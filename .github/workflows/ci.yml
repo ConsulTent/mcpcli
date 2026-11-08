@@ -17,7 +17,9 @@ jobs:
       - run: go vet ./...
       # TestCompatUnreachable waits out 7 x 30s network timeouts - irrelevant to
       # dependency bumps; run it locally before feature commits instead.
-      - run: go test ./... -count=1 -skip TestCompatUnreachable
+      # -race needs CGO's gcc, present on ubuntu-latest (local cgo-less boxes
+      # make local -race best-effort).
+      - run: go test ./... -race -count=1 -skip TestCompatUnreachable
 
   # examples/workflows ships copy-paste templates; keep them actionlint-clean
   # so they are valid the moment someone copies them.

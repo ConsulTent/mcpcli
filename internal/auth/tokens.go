@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"golang.org/x/oauth2"
@@ -28,7 +29,11 @@ func defaultTokenDir() string {
 	return filepath.Join(base, ".mcpcli")
 }
 
-func tokenCachePath() string { return filepath.Join(TokenDir, "tokens.json") }
+// tokenCacheFile is the cache file name within TokenDir holding the OAuth2
+// token map.
+const tokenCacheFile = "tokens.json"
+
+func tokenCachePath() string { return filepath.Join(TokenDir, tokenCacheFile) }
 
 // tokenKey derives the cache key for a target: sha256(target) hex. Targets
 // are URLs or stdio command strings whose raw form is unsuitable as a
@@ -41,33 +46,42 @@ func tokenKey(target string) string {
 
 // tokenMu serializes cache read-modify-write cycles within the process.
 // Crash- and reader-safety across processes comes from the atomic rename in
-// writeCache; lock files are deliberately not used (YAGNI).
+// WriteCacheFile; lock files are deliberately not used (YAGNI).
 var tokenMu sync.Mutex
 
 type tokenCache map[string]*oauth2.Token
 
-func readCache() (tokenCache, error) {
-	data, err := os.ReadFile(tokenCachePath())
+// ReadCacheFile reads the JSON cache file name within TokenDir into v. It is
+// an unlocked primitive: callers doing a read-modify-write cycle hold their
+// own lock (tokenMu for the token trio). A missing file yields
+// (false, nil); a corrupt one is an error wrapping "parsing <path>" — the
+// corrupt-vs-missing discipline every cache in TokenDir inherits.
+func ReadCacheFile(name string, v any) (bool, error) {
+	path := filepath.Join(TokenDir, name)
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return tokenCache{}, nil
+		return false, nil
 	}
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	cache := tokenCache{}
-	if err := json.Unmarshal(data, &cache); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", tokenCachePath(), err)
+	if err := json.Unmarshal(data, v); err != nil {
+		return false, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	return cache, nil
+	return true, nil
 }
 
-func writeCache(cache tokenCache) error {
+// WriteCacheFile atomically writes v as JSON to the cache file name within
+// TokenDir: MarshalIndent 2-space plus a trailing newline, a temp file
+// named after the cache file's stem (cacheTempPattern), then a rename over
+// the target. It is an unlocked primitive, paired with ReadCacheFile.
+func WriteCacheFile(name string, v any) error {
 	if err := os.MkdirAll(TokenDir, 0o700); err != nil {
 		return err
 	}
 	chmodPrivate(TokenDir, 0o700)
 
-	data, err := json.MarshalIndent(cache, "", "  ")
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -76,29 +90,37 @@ func writeCache(cache tokenCache) error {
 	// Atomic replace: write a temp file in the same directory, then rename
 	// over the cache. A concurrent reader sees either the old or the new
 	// file, never a partial one.
-	tmp, err := os.CreateTemp(TokenDir, "tokens-*.json.tmp")
+	tmp, err := os.CreateTemp(TokenDir, cacheTempPattern(name))
 	if err != nil {
 		return err
 	}
-	name := tmp.Name()
+	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		os.Remove(name)
+		os.Remove(tmpName)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(name)
+		os.Remove(tmpName)
 		return err
 	}
 	// os.CreateTemp already uses 0600; the chmod guards against umask
 	// surprises on Unix and is skipped on Windows where the bits are not
 	// enforced.
-	chmodPrivate(name, 0o600)
-	if err := os.Rename(name, tokenCachePath()); err != nil {
-		os.Remove(name)
+	chmodPrivate(tmpName, 0o600)
+	if err := os.Rename(tmpName, filepath.Join(TokenDir, name)); err != nil {
+		os.Remove(tmpName)
 		return err
 	}
 	return nil
+}
+
+// cacheTempPattern derives the os.CreateTemp pattern for a cache file name:
+// "<stem>-*.json.tmp". For tokens.json this is byte-identical to the
+// pre-refactor hard-coded "tokens-*.json.tmp"; bws.json becomes
+// "bws-*.json.tmp".
+func cacheTempPattern(name string) string {
+	return strings.TrimSuffix(name, ".json") + "-*.json.tmp"
 }
 
 // chmodPrivate tightens permissions on Unix. Windows ignores these bits, so
@@ -120,12 +142,12 @@ func SaveToken(target string, tok *oauth2.Token) error {
 	}
 	tokenMu.Lock()
 	defer tokenMu.Unlock()
-	cache, err := readCache()
-	if err != nil {
+	cache := tokenCache{}
+	if _, err := ReadCacheFile(tokenCacheFile, &cache); err != nil {
 		return err
 	}
 	cache[tokenKey(target)] = tok
-	return writeCache(cache)
+	return WriteCacheFile(tokenCacheFile, cache)
 }
 
 // LoadToken returns the cached token for target. A missing cache file or a
@@ -136,8 +158,8 @@ func LoadToken(target string) (*oauth2.Token, error) {
 	}
 	tokenMu.Lock()
 	defer tokenMu.Unlock()
-	cache, err := readCache()
-	if err != nil {
+	cache := tokenCache{}
+	if _, err := ReadCacheFile(tokenCacheFile, &cache); err != nil {
 		return nil, err
 	}
 	return cache[tokenKey(target)], nil
@@ -151,8 +173,8 @@ func DeleteToken(target string) error {
 	}
 	tokenMu.Lock()
 	defer tokenMu.Unlock()
-	cache, err := readCache()
-	if err != nil {
+	cache := tokenCache{}
+	if _, err := ReadCacheFile(tokenCacheFile, &cache); err != nil {
 		return err
 	}
 	key := tokenKey(target)
@@ -160,5 +182,5 @@ func DeleteToken(target string) error {
 		return nil
 	}
 	delete(cache, key)
-	return writeCache(cache)
+	return WriteCacheFile(tokenCacheFile, cache)
 }

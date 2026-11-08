@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ConsulTent/mcpcli/internal/auth"
@@ -32,12 +33,50 @@ type GlobalFlags struct {
 	Protocol     string
 	ClientID     string
 	ClientSecret string
+	Env          []string
 	Timeout      time.Duration
 	JSON         bool
 	Plain        bool
 	Interactive  bool
 	Trace        bool
 	Verbose      bool
+
+	// envBindings is Env parsed by PersistentPreRunE — the flag's one parse
+	// site: duplicate KEYs collapsed last-wins, surviving pairs in
+	// first-appearance order. expandSecretRefs consumes it.
+	envBindings []envBinding
+}
+
+// envBinding is one parsed --env KEY=VALUE pair.
+type envBinding struct {
+	Key   string
+	Value string
+}
+
+// parseEnvPairs parses raw --env pairs: split on the first "=" in the exact
+// args.go house error form, empty KEY rejected with the same form, duplicate
+// KEYs collapsed last-wins. The root hook is the flag's one parse site; this
+// helper is that site's parser.
+func parseEnvPairs(pairs []string) ([]envBinding, error) {
+	bindings := make([]envBinding, 0, len(pairs))
+	for _, pair := range pairs {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok || key == "" {
+			return nil, fmt.Errorf("invalid argument %q: expected KEY=VALUE", pair)
+		}
+		replaced := false
+		for i := range bindings {
+			if bindings[i].Key == key {
+				bindings[i].Value = value
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			bindings = append(bindings, envBinding{Key: key, Value: value})
+		}
+	}
+	return bindings, nil
 }
 
 // NewRootCommand builds the mcp root command with all persistent flags
@@ -87,9 +126,39 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 			// explicitly-set combination is rejected rather than ignored —
 			// the user asked for a behavior the run will not deliver. The
 			// exception is "auth login", which always runs the oauth flow
-			// regardless of --auth, so the flag is meaningful there.
-			if cmd.Flags().Changed("auth-flow") && g.Auth != "oauth" && cmd.Name() != "login" {
+			// regardless of --auth, so the flag is meaningful there. The
+			// parent-group predicate (not the bare command name) keeps
+			// "bws login" from slipping through: its --auth-flow would be
+			// silently inert too.
+			isAuthLogin := cmd.Name() == "login" && cmd.Parent() != nil && cmd.Parent().Name() == "auth"
+			if cmd.Flags().Changed("auth-flow") && g.Auth != "oauth" && !isAuthLogin {
 				return errors.New("--auth-flow only applies to --auth oauth")
+			}
+			// --env validation and classification: the flag's one parse
+			// site. Malformed input fails on ANY command here — not
+			// silently at expansion time on connection commands only.
+			resolver, err := newSecretResolver()
+			if err != nil {
+				return err
+			}
+			bindings, err := parseEnvPairs(g.Env)
+			if err != nil {
+				return err
+			}
+			g.envBindings = bindings
+			for _, b := range bindings {
+				// A literal VALUE is visible in shell history and process
+				// listings, so it says so on stderr — attributing the flag
+				// with the KEY (the value itself is never echoed, the
+				// --client-secret precedent). References — Recognizes
+				// lowercases the scheme, so BWS:// classifies too — and
+				// EMPTY values stay silent: an empty injection leaks
+				// nothing.
+				if b.Value != "" && !resolver.Recognizes(b.Value) {
+					// Functional security note, not mode-gated decoration
+					// (JSON mode silences decoration only).
+					_, _ = fmt.Fprintf(os.Stderr, "warning: --env %s was passed on the command line; prefer a bws:// reference\n", b.Key)
+				}
 			}
 			// The output layer is global per run: derive it from the output
 			// flags before any command emits UI lines.
@@ -103,10 +172,13 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 			}
 			// Functional security note, not mode-gated decoration: a secret
 			// on the command line is visible in shell history and process
-			// listings, so every run of the flag says so on stderr — even in
-			// JSON mode, which silences decoration only.
-			if g.ClientSecret != "" {
-				fmt.Fprintln(os.Stderr, "warning: --client-secret was passed on the command line; prefer the MCPCLI_CLIENT_SECRET environment variable")
+			// listings, so every literal run of the flag says so on stderr —
+			// even in JSON mode, which silences decoration only. A value
+			// that is a registered secret reference (bws:// — Recognizes
+			// lowercases the scheme) never reaches argv as plaintext and
+			// stays silent.
+			if g.ClientSecret != "" && !resolver.Recognizes(g.ClientSecret) {
+				_, _ = fmt.Fprintln(os.Stderr, "warning: --client-secret was passed on the command line; prefer bws:// references or MCPCLI_CLIENT_SECRET")
 			}
 			if _, err := auth.ProviderFor(g.Auth); err != nil {
 				return fmt.Errorf("invalid value for --auth: %w", err)
@@ -124,6 +196,10 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 	pf.StringVar(&g.Protocol, "protocol", "auto", `MCP protocol version: auto, draft, or a date such as "2025-06-18"`)
 	pf.StringVar(&g.ClientID, "client-id", "", "OAuth client ID (env MCPCLI_CLIENT_ID)")
 	pf.StringVar(&g.ClientSecret, "client-secret", "", "OAuth client secret (env MCPCLI_CLIENT_SECRET)")
+	// StringArrayVar, not StringSliceVar: the slice type CSV-splits values
+	// and would corrupt a comma-bearing literal (the house repeatable-flag
+	// precedent).
+	pf.StringArrayVar(&g.Env, "env", nil, "environment variable for stdio servers as KEY=VALUE (repeatable; VALUE may be a bws:// secret reference)")
 	pf.DurationVar(&g.Timeout, "timeout", 30*time.Second, "timeout for network operations")
 	pf.BoolVar(&g.JSON, "json", false, "emit machine-readable JSON output")
 	pf.BoolVar(&g.Plain, "plain", false, "plain ASCII output without emoji, ANSI colors, or spinners")
@@ -135,7 +211,7 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 	// of opening a server session, so it imposes no connection flags.
 	// compat opens its own pinned sessions and ignores auth; jev check opens
 	// its own session but honors auth.
-	cmd.AddCommand(newAuthCommand(g), newInfoCommand(), newPingCommand(), newCompatCommand(), newToolsCommand(), newResourcesCommand(), newPromptsCommand(), newJevCommand())
+	cmd.AddCommand(newAuthCommand(g), newBWSCommand(g), newInfoCommand(), newPingCommand(), newCompatCommand(), newToolsCommand(), newResourcesCommand(), newPromptsCommand(), newJevCommand())
 
 	return cmd
 }

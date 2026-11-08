@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ConsulTent/mcpcli/internal/bws"
 	"github.com/ConsulTent/mcpcli/internal/ui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -185,5 +186,70 @@ func TestPlainNoSpecialChars(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestBearerRefFlowE2E pins the bearer path through a secret reference:
+// --client-secret bws://<uuid> resolves through the fake BWS BEFORE the
+// connection opens, the MCP server observes the RESOLVED value in the
+// Authorization header, the identity exchange is paid once per run (the
+// Source's client memo), and the always-on instance note prints exactly
+// once — while a run without references prints none.
+func TestBearerRefFlowE2E(t *testing.T) {
+	bwsTestTokenDir(t)
+	orgKey := bwsTestOrgKey(t)
+	uuidRef := "11111111-2222-3333-4444-555555555555"
+	fa := newBWSTestAPI(t, orgKey, map[string]bws.Secret{
+		uuidRef: {
+			ID: uuidRef, OrganizationID: bwsTestOrgID, Key: "first", Value: "value-a", CanRead: true,
+		},
+	})
+	fi := newBWSTestIdentity(t)
+	if err := bws.SaveCredential(bws.Credential{
+		APIToken:    bwsTestToken,
+		OrgID:       bwsTestOrgID,
+		APIURL:      fa.url,
+		IdentityURL: fi.url,
+	}); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
+	}
+	// The env selector path (dummies via t.Setenv): the expansion resolves
+	// MCPCLI_BWS_API_URL, not just the cache.
+	t.Setenv("MCPCLI_BWS_API_URL", fa.url)
+
+	srv := mcp.NewServer(&mcp.Implementation{Name: "testserver", Version: "1.0.0"}, nil)
+	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	var gotAuth string
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		streamable.ServeHTTP(w, r)
+	}))
+	t.Cleanup(httpSrv.Close)
+
+	stdout, stderr, _, err := runRoot(t, "--url", httpSrv.URL, "--auth", "bearer",
+		"--client-secret", "bws://"+uuidRef, "ping")
+	if err != nil {
+		t.Fatalf("ping with a bws:// bearer ref: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "pong") {
+		t.Fatalf("ping stdout %q does not report pong", stdout)
+	}
+	if gotAuth != "Bearer value-a" {
+		t.Fatalf("Authorization header = %q, want the resolved value", gotAuth)
+	}
+	if n := fi.exchangeHits(); n != 1 {
+		t.Errorf("identity exchange hit %d times, want 1 (memoized per run)", n)
+	}
+	if got := strings.Count(stderr, "bws: using instance "+fa.url); got != 1 {
+		t.Errorf("instance note count = %d, want exactly 1\nstderr:\n%s", got, stderr)
+	}
+
+	// A run without any reference stays off the expansion path: no note.
+	_, stderr, _, err = runRoot(t, "--url", httpSrv.URL, "ping")
+	if err != nil {
+		t.Fatalf("plain ping: %v\nstderr: %s", err, stderr)
+	}
+	if strings.Contains(stderr, "bws: using instance") {
+		t.Errorf("plain ping printed the instance note\nstderr:\n%s", stderr)
 	}
 }

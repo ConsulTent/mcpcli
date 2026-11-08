@@ -1,6 +1,6 @@
 # Example workflows: code quality checks with the mcp CLI
 
-Three copy-paste GitHub Actions workflows that review pull requests with the
+Four copy-paste GitHub Actions workflows that review pull requests with the
 [`mcp`](https://github.com/ConsulTent/mcpcli) CLI. Copy the file you want
 into your repository under `.github/workflows/`, set the secrets it names,
 and adjust the pinned versions to your taste.
@@ -9,6 +9,7 @@ and adjust the pinned versions to your taste.
 |---|---|---|---|
 | [`llm-pr-review.yml`](llm-pr-review.yml) | an LLM, every PR | `OPENROUTER_API_KEY` | You want the closest thing to Claude Code / Copilot review under your own prompt and model. Highest coverage, highest cost per PR. |
 | [`jev-pr-review.yml`](jev-pr-review.yml) | TypeSafe Jev, every PR | `TYPESAFE_API_KEY` | You want fast, cheap, typed judgments (rubric scores, `safe_to_apply`, reason codes) and no LLM in the loop. Advisory scores, not prose. |
+| [`jev-pr-review-bws.yml`](jev-pr-review-bws.yml) | TypeSafe Jev, every PR; key from Bitwarden | `MCPCLI_BWS_ACCESS_TOKEN` | Same as jev-pr-review, but the org keeps the TypeSafe key in Bitwarden Secrets Manager — CI holds only a machine-account token and the key rides `--env TYPESAFE_API_KEY=bws://<name>`. |
 | [`hybrid-pr-review.yml`](hybrid-pr-review.yml) | Jev screens, LLM reviews only what Jev flags | both | TypeSafe's confidence-routing pattern: clean diffs never reach the LLM; flagged diffs get an LLM review focused by Jev's limiting rubrics. |
 
 ## Managed alternatives
@@ -23,7 +24,7 @@ per-call cost:
   request is scriptable from a workflow; the review itself always runs on
   GitHub's infrastructure.
 
-## Setup common to all three
+## Setup common to all four
 
 - **mcp ≥ v1.3.1** — each workflow installs it with
   `go install github.com/ConsulTent/mcpcli/cmd/mcp@v1.3.1`; bump the version
