@@ -41,8 +41,12 @@ skill: `/plugin marketplace add ConsulTent/mcpcli`.
   (the full JSON result still reaches stdout first, then the command exits 1)
   and every `jev check` outcome after a successful connect: the report
   document always prints on stdout first — in `--json` and human modes —
-  including no-flavor, aborted-battery and probe-error cases. A connect
-  failure still prints only the error (stdout may be empty).
+  including no-flavor, aborted-battery and probe-error cases. The third
+  exception is `bws get`, which aborts on the first failing ref: refs
+  resolved before it still print — their `KEY=value` lines (or the partial
+  `{secrets:[...]}` document in `--json`) reach stdout before the command
+  exits 1. A connect failure still prints only the error (stdout may be
+  empty).
 - `--timeout` bounds each network operation (default 30s). Set it explicitly
   in scripts so a slow server cannot hang a step.
 - Tool image/audio blocks render as one ASCII summary line each, never a
@@ -75,6 +79,7 @@ skill: `/plugin marketplace add ConsulTent/mcpcli`.
 | `--protocol` | `auto` | `auto`, `draft`, or a date such as `2025-06-18` |
 | `--client-id` | | OAuth client ID (env `MCPCLI_CLIENT_ID`) |
 | `--client-secret` | | OAuth client secret / bearer token (env `MCPCLI_CLIENT_SECRET`); flags win over env |
+| `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference); expanded and injected only when the run spawns a stdio child |
 | `--timeout` | `30s` | timeout for network operations |
 | `--json` | `false` | one JSON document on stdout, no decoration |
 | `--plain` | `false` | byte-ASCII output (no emoji/ANSI) |
@@ -134,6 +139,28 @@ authorization URL and reads the pasted code from stdin; tokens cache under
 export MCPCLI_CLIENT_ID=... MCPCLI_CLIENT_SECRET=...
 mcp auth login --url "$SRV" --auth-flow manual --timeout 60s
 mcp auth logout --url "$SRV"
+```
+
+Bitwarden Secrets Manager — `mcp bws login`/`logout`/`list`/`get` manage
+cached machine-account logins and read secrets (`login` validates the token
+with a live identity-server exchange and caches token + org id + instance
+URLs; `logout` is strictly offline; `list` shows decrypted-name metadata
+only; `get <ref>...` prints one `KEY=value` line per ref). The verbs take
+the BARE ref (secret uuid or name) — a `bws://`-prefixed ref fails closed
+naming the bare form. `bws://` references expand ONLY in `--env` values and
+`--client-secret`; a ref in `--arg`/tool args stays literal. `MCPCLI_BWS_API_URL`
+selects the instance when several are cached (`--api-url` flag > env >
+single cached login); `MCPCLI_BWS_ACCESS_TOKEN` is the login-time token
+input. Dummy-shape examples (substitute your own):
+
+```sh
+export MCPCLI_BWS_ACCESS_TOKEN="0.00000000-0000-0000-0000-000000000000.DUMMY_SECRET:AAAAAAAAAAAAAAAAAAAAAA=="
+mcp bws login --org 00000000-0000-0000-0000-000000000001
+mcp bws list
+mcp bws get 00000000-0000-0000-0000-000000000002
+mcp --url "$SRV" --auth bearer --client-secret bws://ci-token --json tools list
+mcp --command "npx -y github-mcp-server" --env GITHUB_TOKEN=bws://github-pat --json tools list
+mcp --command "npx -y @jkudish/jev-mcp" --env TYPESAFE_API_KEY=bws://jev --json jev check --probe --probe-on-auth-error skip
 ```
 
 stdio servers (local tools) — pass the whole command line as one string:

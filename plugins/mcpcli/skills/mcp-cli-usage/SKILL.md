@@ -1,6 +1,6 @@
 ---
 name: mcp-cli-usage
-description: Drive any MCP (Model Context Protocol) server from the command line with the mcp CLI — probe connectivity, list and call tools, read resources, fetch prompts, check protocol-version compatibility, manage OAuth, run headless in scripts and CI, screen patches with Jev judgment servers, and pass file-sized payloads with --in-file. Use whenever the user mentions MCP servers, MCP tools/resources/prompts, Model Context Protocol, protocol compatibility, or Jev/jev judgment servers.
+description: Drive any MCP (Model Context Protocol) server from the command line with the mcp CLI — probe connectivity, list and call tools, read resources, fetch prompts, check protocol-version compatibility, manage OAuth, pull secrets from Bitwarden Secrets Manager, run headless in scripts and CI, screen patches with Jev judgment servers, and pass file-sized payloads with --in-file. Use whenever the user mentions MCP servers, MCP tools/resources/prompts, Model Context Protocol, protocol compatibility, Bitwarden Secrets Manager, bws:// secret references, or Jev/jev judgment servers.
 ---
 
 # Driving MCP servers with the mcp CLI
@@ -45,6 +45,7 @@ scripts and CI.
 | `--protocol` | `auto` | `auto`, `draft`, or a date such as `2025-06-18` |
 | `--client-id` | | OAuth client ID (env `MCPCLI_CLIENT_ID`) |
 | `--client-secret` | | OAuth client secret / bearer token (env `MCPCLI_CLIENT_SECRET`); flags win over env |
+| `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference); expanded and injected only when the run spawns a stdio child |
 | `--timeout` | `30s` | timeout for network operations |
 | `--json` | `false` | one JSON document on stdout, no decoration |
 | `--plain` | `false` | byte-ASCII output (no emoji/ANSI) |
@@ -116,14 +117,37 @@ authorization URL and reads the pasted code from stdin. Tokens cache under
 export MCPCLI_CLIENT_ID=... MCPCLI_CLIENT_SECRET=...
 mcp auth login --url "$SRV" --auth-flow manual --timeout 60s
 mcp auth logout --url "$SRV"
+mcp --url "$SRV" --auth bearer --client-secret bws://ci-token --json tools list   # bearer via Bitwarden ref
+```
+
+## Bitwarden Secrets Manager (`mcp bws`)
+
+`bws://<uuid>` (or `bws://<name>`) references expand ONLY in `--env` values
+and `--client-secret` — a ref in `--arg`/tool args stays literal. The
+`mcp bws` verbs themselves take the BARE ref and manage the cached
+machine-account login: `login` validates the token with a live
+identity-server exchange and stores token + org id + instance URLs
+(`MCPCLI_BWS_ACCESS_TOKEN` is the argv-free token input; `--org` enables
+name refs); `logout [--api-url]` deletes it offline; `list` shows
+decrypted-name metadata (never values); `get <ref>...` prints one
+`KEY=value` line per ref. `MCPCLI_BWS_API_URL` selects the instance when
+several are cached (`--api-url` flag > env > single cached login).
+
+```sh
+export MCPCLI_BWS_ACCESS_TOKEN="0.00000000-0000-0000-0000-000000000000.DUMMY_SECRET:AAAAAAAAAAAAAAAAAAAAAA=="
+mcp bws login --org 00000000-0000-0000-0000-000000000001
+mcp bws get 00000000-0000-0000-0000-000000000002
 ```
 
 ## stdio servers (local tools)
 
-Pass the whole command line as one string:
+Pass the whole command line as one string. `--env KEY=VALUE` (repeatable)
+injects environment variables into the child process, overriding inherited
+ones; a `bws://` VALUE resolves before the child spawns:
 
 ```sh
 mcp --command "npx -y @modelcontextprotocol/server-everything" --json tools list
+mcp --command "npx -y github-mcp-server" --env GITHUB_TOKEN=bws://github-pat --json tools list
 ```
 
 ## Jev judgment servers
@@ -145,6 +169,7 @@ mcp --command "npx -y @jkudish/jev-mcp" --json jev screen "please review this pa
 mcp --command "jev-use serve" --json jev gate write_file --input '{"path":"x.txt"}'
 # gate checks one tool call; --input is inline JSON ("-" reads stdin), --state adds surrounding state
 mcp --command "npx -y @jkudish/jev-mcp" --json jev check   # flavor + support matrix
+mcp --command "npx -y @jkudish/jev-mcp" --env TYPESAFE_API_KEY=bws://jev --json jev check   # provider key from Bitwarden
 ```
 
 (answers are the live model's; they vary per call)
@@ -224,6 +249,9 @@ jq -n --rawfile diff pr.diff --arg request "$PR_TITLE" '{request: $request, diff
   on stdout first, even for no-flavor, aborted-battery and probe-error
   outcomes. A connect failure does not — only the error, stdout may be
   empty.
+- `bws get` aborts on the first failing ref: refs resolved before it still
+  print — their `KEY=value` lines (or the partial `{secrets:[...]}` document
+  in `--json`) reach stdout before the command exits 1.
 
 ## The REPL
 
@@ -256,6 +284,19 @@ jq -e '.summary.auth_skipped == 0 and .summary.errors == 0' jev-check.json >/dev
   echo "::notice::Jev provider key rejected (auth/billing) — skipping"
   exit 0
 }
+```
+
+With Bitwarden Secrets Manager, CI holds only the machine-account token
+(`MCPCLI_BWS_ACCESS_TOKEN`, a masked secret) and the provider key rides a
+`bws://` reference — resolved before the server spawns, never in argv or
+logs:
+
+```sh
+export MCPCLI_BWS_ACCESS_TOKEN="$BWS_TOKEN"   # CI: a masked secret
+mcp bws login --org 00000000-0000-0000-0000-000000000001
+mcp --command "npx -y @jkudish/jev-mcp@0.14.7" \
+  --env TYPESAFE_API_KEY=bws://jev --json jev check --probe \
+  --probe-on-auth-error skip --timeout 60s >jev-check.json
 ```
 
 ## Scripting checklist

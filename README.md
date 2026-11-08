@@ -157,6 +157,10 @@ one JSON document of its result on stdout.
 | `prompts get NAME` | Fetch a prompt with `--arg`/`--in-file` string arguments |
 | `auth login` | Run the OAuth flow against an HTTP server and cache the token |
 | `auth logout` | Delete the cached token for `--url`/`--command` (offline) |
+| `bws login` | Store a Bitwarden Secrets Manager machine-account login in the cache, validating it with a live identity-server exchange |
+| `bws logout` | Delete a cached Bitwarden instance login (offline) |
+| `bws list` | List the organization's Bitwarden secrets as decrypted-name metadata (never values) |
+| `bws get <ref>...` | Print Bitwarden secret values for bare refs (uuid or name), one `KEY=value` line per ref |
 | `jev ask [QUESTION]` | One typed Jev question — `--opt` asks a choice, `--levels` a score, neither a noul; `--in-file` reads the question or context/evidence/priorities from files |
 | `jev verify` | Check claims against evidence (jkudish flavor); `--in-file claim=`/`evidence=` read them from files |
 | `jev screen [TEXT]` | Screen one text for prompt injection (jkudish flavor); `--in-file` reads the text or purpose from a file |
@@ -273,8 +277,16 @@ so any run that sets `--client-secret` prints a one-line warning to stderr — f
 output in every mode, `--json` included:
 
 ```
-warning: --client-secret was passed on the command line; prefer the MCPCLI_CLIENT_SECRET environment variable
+warning: --client-secret was passed on the command line; prefer bws:// references or MCPCLI_CLIENT_SECRET
 ```
+
+The same family covers the other literal-secret flags: `--env KEY=literal`
+warns `--env KEY was passed on the command line; prefer a bws:// reference`
+(attributing the KEY, never echoing the value), and `bws login
+--access-token <token>` warns `--access-token was passed on the command
+line; prefer the MCPCLI_BWS_ACCESS_TOKEN environment variable`. A value that
+is itself a `bws://` reference (any letter case) never reaches argv as
+plaintext and stays silent; an empty `--env` value stays silent too.
 
 The `oauth` flow itself needs no credentials — it falls back to dynamic client
 registration.
@@ -294,6 +306,137 @@ handler the HTTP transport drives — and register it with one `auth.Register` c
 your type's `init()` or by extending `auth.RegisterBuiltins`). The CLI derives `--auth`
 validation and error messages from the registry, so no other change is needed. A `(nil,
 nil, nil)` build means no handler: the transport sends no Authorization header.
+
+## Bitwarden Secrets Manager (`mcp bws`)
+
+mcp pulls secrets from [Bitwarden Secrets Manager](https://bitwarden.com/products/secrets-manager/)
+(BWS) with a **machine account** and uses them as MCP credentials: the bearer
+token for an HTTP server (`--client-secret bws://name`), or environment
+variables for stdio servers — `--env TYPESAFE_API_KEY=bws://jev` hands a Jev
+server its provider key, `--env GITHUB_TOKEN=bws://github-pat` gives
+github-mcp-server its PAT. Machine accounts authenticate with a long-lived
+access token that mcp stores in its `0600` credential cache — the same
+discipline as the OAuth token cache.
+
+### Machine-account access tokens
+
+A machine account's access token is `0.<key-id>.<client-secret>:<seed>`.
+The client credentials are embedded in the token itself, and the `<seed>`
+part stays client-side: it derives the decryption keys locally and is never
+sent to any server. Talking to the Secrets Manager API requires a
+client-credentials exchange against the instance's identity server; the
+short-lived JWT that returns (plus the derived organization key) lives in
+memory for the run only and is never cached or written to disk.
+
+### The commands
+
+```sh
+# Store a machine-account login (token via the environment avoids the
+# argv warning). --org enables secret-NAME refs; both --api-url and
+# --identity-url default to the dedicated .com instance:
+export MCPCLI_BWS_ACCESS_TOKEN="0.00000000-0000-0000-0000-000000000000.DUMMY_SECRET:AAAAAAAAAAAAAAAAAAAAAA=="
+mcp bws login --org 00000000-0000-0000-0000-000000000001
+
+mcp bws list                                    # decrypted-name metadata, never values
+mcp bws get TYPESAFE_API_KEY                    # bare ref: uuid or name
+mcp bws get 00000000-0000-0000-0000-000000000002 00000000-0000-0000-0000-000000000003
+mcp bws logout --api-url https://api.bitwarden.com
+```
+
+- `bws login --access-token <token> [--org <uuid>] [--api-url URL] [--identity-url URL]`
+  validates the token by performing the live exchange against the identity
+  server, then caches token, org id and both instance URLs keyed by the
+  normalized API URL. An empty `--api-url` defaults to
+  `https://api.bitwarden.com`, an empty `--identity-url` to
+  `https://identity.bitwarden.com`.
+- `bws logout [--api-url]` deletes one cached instance login. Strictly
+  offline; idempotent with nothing cached; with several instances cached,
+  `--api-url` is required. It ignores `MCPCLI_BWS_API_URL`.
+- `bws list` prints the organization's secrets as a table of decrypted
+  names with per-secret read/write grants and project ids. Values never
+  reach this output.
+- `bws get <ref>...` fetches one or more secrets and prints one `KEY=value`
+  line per ref (KEY is the decrypted secret name — directly consumable as an
+  `--env` LHS). In `--json` mode it prints `{secrets: [...]}` in ref order.
+  The loop aborts on the first failing ref; refs resolved before it still
+  print before the command exits 1.
+
+**Secret values go to stdout by design.** `bws get` is the one mcp surface
+that prints secret content; everything else (metadata, warnings, the
+`bws: using instance …` note) goes to stderr. Pipe or redirect
+deliberately, and never paste stdout into shared logs.
+
+### Ref grammar and expansion scope
+
+`bws://` references are whole values of the form `bws://<uuid>` or
+`bws://<name>` — the uuid-or-name of one secret. **Refs expand only in two
+places:** `--env` values and `--client-secret`. A correctly spelled ref
+passed as a tool argument (`--arg`, `-A` JSON, `--in-file` content, prompt
+arguments) stays a literal string; mcp never scans tool payloads. A
+misspelled scheme in the two expanded places stays literal too (`bwss://name`
+is just a string).
+
+The `bws` verbs themselves take the **bare** ref — no `bws://` prefix:
+
+```sh
+mcp bws get TYPESAFE_API_KEY                    # yes
+mcp bws get bws://TYPESAFE_API_KEY              # fails: "pass the bare ref"
+```
+
+Expansion happens once, before any connection opens: a `--client-secret`
+ref resolves into the bearer token on every run, and `--env` refs resolve
+only when the run spawns a stdio child (`--command`) — HTTP runs and the
+`--url` REPL never expand them. Refs resolve once at session open, so a
+secret rotated mid-run needs a new run (a REPL needs a restart).
+
+### `--env` and the environment variables
+
+`--env KEY=VALUE` (repeatable) injects environment variables into the stdio
+server process, overriding anything inherited. `VALUE` may be a `bws://`
+reference or a literal (literals warn — see the warning family above). The
+two BWS environment variables are:
+
+- `MCPCLI_BWS_ACCESS_TOKEN` — the login-time token input for `bws login`
+  (the argv-free alternative to `--access-token`).
+- `MCPCLI_BWS_API_URL` — the instance selector for the reading verbs
+  (`list`/`get`) and for `bws://` expansion. Consult-in-order:
+  `--api-url` flag beats `MCPCLI_BWS_API_URL` beats the single cached login;
+  with several cached instances, one of the first two is required.
+
+```sh
+mcp --url https://example.com/mcp --auth bearer --client-secret bws://ci-token --json ping
+mcp --command "npx -y github-mcp-server" --env GITHUB_TOKEN=bws://github-pat --json tools list
+mcp --command "npx -y @jkudish/jev-mcp" --env TYPESAFE_API_KEY=bws://jev --json jev check --probe --probe-on-auth-error skip
+```
+
+### Instances
+
+Every verb targets one Bitwarden instance; one run = one instance. All four
+forms work — pass both URLs at login (normalization trims trailing slashes,
+lowercases the host, strips default ports):
+
+- Dedicated (US) — `https://api.bitwarden.com` + `https://identity.bitwarden.com` (the defaults).
+- Dedicated (EU) — `https://api.bitwarden.eu` + `https://identity.bitwarden.eu`.
+- Path-prefixed (EU) — `https://vault.bitwarden.eu/api` + `https://vault.bitwarden.eu/identity`.
+- Self-hosted — any http(s) base. Validation is scheme-level only (no host
+  blocklist); URLs carrying userinfo, a query or a fragment are rejected,
+  and a plain-`http://` instance prints an unencrypted-transport warning.
+
+### Exit codes
+
+`bws` verbs follow the global rule: `0` on success, `1` on any failure. The
+one stdout nuance: `bws get` aborts on the first failing ref, and refs
+resolved before it still emit their `KEY=value` lines (or the partial
+`{secrets: [...]}` document in `--json`) before the exit.
+
+### Adding other secret managers
+
+Secret resolution is a registry-free seam, not a BWS feature: a source is
+one package implementing `secret.Source` — `Scheme()` returning the scheme
+it claims and `Resolve(ctx, ref)` turning the text after `<scheme>://` into
+a value — registered with one line in the CLI's resolver wiring. A second
+manager (1Password, 2FAS Pass, …) is exactly that pair; duplicate schemes
+fail at construction, and unknown schemes pass through as literals.
 
 ## Jev judgment servers
 
@@ -568,6 +711,7 @@ only `exit`, `quit`, or end of input leaves it.
 | `--protocol` | `auto` | `auto`, `draft`, or a protocol date such as `2025-06-18` |
 | `--client-id` | | OAuth client ID (env `MCPCLI_CLIENT_ID`) |
 | `--client-secret` | | OAuth client secret (env `MCPCLI_CLIENT_SECRET`); also the bearer token |
+| `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference) |
 | `--timeout` | `30s` | timeout for network operations |
 | `--json` | `false` | machine-readable JSON output |
 | `--plain` | `false` | plain ASCII output, no emoji/colors/spinners |
@@ -647,6 +791,27 @@ when the provider rejects its key — the skipped battery is reported as data (s
   else still fails; `jev gate --input` on the command line is visible in
   process listings like any argument — use `--input -` (stdin) for sensitive
   tool arguments.
+- BWS secret references and `mcp bws` (see
+  [Bitwarden Secrets Manager](#bitwarden-secrets-manager-mcp-bws)):
+  - a misspelled scheme stays a literal value — `bwss://name` expands to
+    itself and nothing reports the misspelling;
+  - refs resolve once at session open: a rotated secret needs a new run,
+    and the REPL needs a restart;
+  - multi-line secret values spill across `KEY=value` lines in `bws get`'s
+    human output;
+  - a decrypted secret name that contains `=`, is empty, or carries a
+    newline/CR breaks the `KEY=value` one-line premise;
+  - exotic bytes beyond NUL (which is rejected) may misbehave downstream in
+    exec environments or HTTP headers;
+  - `--plain` governs mcp's decoration, never secret bytes — a secret VALUE
+    is printed exactly as decrypted;
+  - `--env` is validated on every command but expanded and injected only
+    for stdio children — never on the `bws` verbs, `compat`, `auth login`,
+    or HTTP runs / the `--url` REPL;
+  - an organization with more secrets than one list page fails loud on the
+    response's `continuationToken` (pagination is unsupported);
+  - two secrets whose decrypted names collide emit duplicate `KEY=value`
+    lines (env-file consumers apply them silently last-wins).
 
 ## License
 
