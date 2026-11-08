@@ -114,10 +114,21 @@ type TokenResponse struct {
 	EncryptedPayload EncString `json:"encrypted_payload"`
 }
 
+// Project is one project association on a Secret. The live wire (re-proved
+// against the real EU instance) carries an array of these objects — not id
+// strings — with Name an EncString decrypted in place under the same policy
+// as the Secret fields. Exported because the CLI layer's fakes and outputs
+// construct and read it by name.
+type Project struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // Secret is one BWS secret. It doubles as the wire-decode shape (json tags
 // keep the wire's lowercase read/write; there is deliberately no
 // CreationDate field — nothing pins it) and the decrypted result: Key,
-// Value and Note hold EncStrings after decode and are decrypted in place.
+// Value, Note and each Project Name hold EncStrings after decode and are
+// decrypted in place.
 type Secret struct {
 	ID             string    `json:"id"`
 	OrganizationID string    `json:"organizationId"`
@@ -127,7 +138,7 @@ type Secret struct {
 	CanRead        bool      `json:"read"`
 	CanWrite       bool      `json:"write"`
 	RevisionDate   time.Time `json:"revisionDate"`
-	Projects       []string  `json:"projects"`
+	Projects       []Project `json:"projects"`
 }
 
 // SecretUpdateRequest is the body for PUT /secrets/{id}. ID, OrganizationID,
@@ -496,9 +507,9 @@ func (c *Client) getSecret(ctx context.Context, id string) (*Secret, error) {
 	return &s, nil
 }
 
-// decryptSecretFields decrypts key, value and note in place with the org
-// key. One failure aborts everything: a half-decoded secret must never
-// surface.
+// decryptSecretFields decrypts key, value, note and each project name in
+// place with the org key. One failure aborts everything: a half-decoded
+// secret must never surface.
 func decryptSecretFields(s *Secret, orgKey []byte) error {
 	enc, mac := orgKey[:32], orgKey[32:64]
 	for _, field := range []struct {
@@ -514,6 +525,13 @@ func decryptSecretFields(s *Secret, orgKey []byte) error {
 			return fmt.Errorf("decrypting the %s field: %w", field.name, err)
 		}
 		*field.val = plain
+	}
+	for i := range s.Projects {
+		plain, err := decryptEncString(EncString(s.Projects[i].Name), enc, mac)
+		if err != nil {
+			return fmt.Errorf("decrypting project %s's name field: %w", s.Projects[i].ID, err)
+		}
+		s.Projects[i].Name = plain
 	}
 	return nil
 }
@@ -614,6 +632,13 @@ func (c *Client) ListSecrets(ctx context.Context) ([]Secret, error) {
 			return nil, fmt.Errorf("bws: secret %s: decrypting the listed key: %w", envelope.Secrets[i].ID, err)
 		}
 		envelope.Secrets[i].Key = plain
+		for j := range envelope.Secrets[i].Projects {
+			name, err := decryptEncString(EncString(envelope.Secrets[i].Projects[j].Name), enc, mac)
+			if err != nil {
+				return nil, fmt.Errorf("bws: secret %s: decrypting project %s's listed name: %w", envelope.Secrets[i].ID, envelope.Secrets[i].Projects[j].ID, err)
+			}
+			envelope.Secrets[i].Projects[j].Name = name
+		}
 	}
 	return envelope.Secrets, nil
 }

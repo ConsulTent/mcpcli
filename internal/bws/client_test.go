@@ -269,7 +269,8 @@ func (fa *fakeAPI) setContinuation(tok string) {
 }
 
 // wireSecret encrypts the plaintext fields with the org key, producing the
-// wire-form Secret the fake serves.
+// wire-form Secret the fake serves. Project names ride the same org-key
+// EncString form as the live wire's per-item projects objects.
 func wireSecret(t *testing.T, orgKey []byte, s Secret) Secret {
 	t.Helper()
 	enc, mac := orgKey[:32], orgKey[32:64]
@@ -282,6 +283,11 @@ func wireSecret(t *testing.T, orgKey []byte, s Secret) Secret {
 	}
 	if s.Note, err = encField(s.Note, enc, mac); err != nil {
 		t.Fatalf("encrypt note: %v", err)
+	}
+	for i := range s.Projects {
+		if s.Projects[i].Name, err = encField(s.Projects[i].Name, enc, mac); err != nil {
+			t.Fatalf("encrypt project %s name: %v", s.Projects[i].ID, err)
+		}
 	}
 	return s
 }
@@ -850,7 +856,7 @@ func TestGetSecretByRef(t *testing.T) {
 					Key: "jev", Value: "the-api-key-value", Note: "a note",
 					CanRead: true, CanWrite: false,
 					RevisionDate: time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC),
-					Projects:     []string{"aaaaaaaa-0000-0000-0000-000000000000"},
+					Projects:     []Project{{ID: "aaaaaaaa-0000-0000-0000-000000000000", Name: "proj-a"}},
 				}),
 			}
 			fi := newFakeIdentity(t, form.identMount, tok, orgKey)
@@ -863,6 +869,9 @@ func TestGetSecretByRef(t *testing.T) {
 			}
 			if s.Key != "jev" || s.Value != "the-api-key-value" || s.Note != "a note" {
 				t.Errorf("decrypted secret = %+v", s)
+			}
+			if len(s.Projects) != 1 || s.Projects[0].ID != "aaaaaaaa-0000-0000-0000-000000000000" || s.Projects[0].Name != "proj-a" {
+				t.Errorf("decrypted projects = %+v, want the one project with its name decrypted", s.Projects)
 			}
 			if !s.CanRead || s.CanWrite {
 				t.Errorf("read/write flags = %v/%v, want true/false", s.CanRead, s.CanWrite)
@@ -1033,6 +1042,137 @@ func TestListSecrets(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "machine account") || !strings.Contains(err.Error(), "Bitwarden") {
 			t.Errorf("403 error %q lacks the remediation pointer", err)
+		}
+	})
+}
+
+// TestSecretProjectsWireShape pins the LIVE per-secret projects wire shape
+// (re-proved against the real EU instance, 2026-11-08): `projects` is an
+// array of OBJECTS `{"id": ..., "name": <EncString>}` — the live list run
+// failed with "json: cannot unmarshal object into .secrets.0.projects.0 of
+// type string" against the old []string decode, and the live GET probe
+// showed "projects": [{"id": ..., "name": "2.AyFL…"}]. The bodies below are
+// the live shapes verbatim (synthetic uuids; names encrypted with the fake
+// org key) and are served RAW — through no struct-based fake — so the test
+// stays independent of the decode under change.
+func TestSecretProjectsWireShape(t *testing.T) {
+	tok, _, _, _ := dummyAccessToken(t)
+	orgKey := testOrgKey(t)
+	orgID := "01234567-89ab-cdef-0123-456789abcdef"
+	id := "11111111-2222-3333-4444-555555555555"
+	projID := "1077cafe-0000-4000-8000-000000000000"
+	enc, mac := orgKey[:32], orgKey[32:64]
+	encKeyField, err := encField("live-shape-key", enc, mac)
+	if err != nil {
+		t.Fatalf("encrypt key field: %v", err)
+	}
+	encValueField, err := encField("live-shape-value", enc, mac)
+	if err != nil {
+		t.Fatalf("encrypt value field: %v", err)
+	}
+	encNote, err := encField("", enc, mac)
+	if err != nil {
+		t.Fatalf("encrypt note field: %v", err)
+	}
+	encName, err := encField("Projekt Eins", enc, mac)
+	if err != nil {
+		t.Fatalf("encrypt project name: %v", err)
+	}
+
+	secret := fmt.Sprintf(`{"id":%q,"organizationId":%q,"key":%q,"value":%q,"note":%q,"read":true,"write":false,"revisionDate":"2026-11-08T10:00:00.000000Z","projects":[{"id":%q,"name":%q}]}`,
+		id, orgID, encKeyField, encValueField, encNote, projID, encName)
+	listBody := `{"object":"secretListView","projects":[],"secrets":[` + secret + `],"continuationToken":""}`
+
+	newRawAPI := func() *Client {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.URL.Path == "/organizations/"+orgID+"/secrets":
+				_, _ = w.Write([]byte(listBody))
+			case strings.HasPrefix(r.URL.Path, "/secrets/"):
+				_, _ = w.Write([]byte(secret))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(srv.Close)
+		fi := newFakeIdentity(t, "", tok, orgKey)
+		return NewClient(srv.URL, fi.url, tok, orgID)
+	}
+
+	t.Run("list decodes object projects", func(t *testing.T) {
+		items, err := newRawAPI().ListSecrets(t.Context())
+		if err != nil {
+			t.Fatalf("ListSecrets against the live object-shape wire: %v", err)
+		}
+		if len(items) != 1 || len(items[0].Projects) != 1 {
+			t.Fatalf("listed projects = %+v, want the one object project", items)
+		}
+		if got := items[0].Projects[0]; got.ID != projID || got.Name != "Projekt Eins" {
+			t.Errorf("listed project = {%s %q}, want {%s %q} (id carried, name decrypted)", got.ID, got.Name, projID, "Projekt Eins")
+		}
+	})
+
+	t.Run("get decodes object projects", func(t *testing.T) {
+		s, err := newRawAPI().GetSecretByRef(t.Context(), id)
+		if err != nil {
+			t.Fatalf("GetSecretByRef against the live object-shape wire: %v", err)
+		}
+		if len(s.Projects) != 1 {
+			t.Fatalf("got projects = %+v, want the one object project", s.Projects)
+		}
+		if got := s.Projects[0]; got.ID != projID || got.Name != "Projekt Eins" {
+			t.Errorf("got project = {%s %q}, want {%s %q} (id carried, name decrypted)", got.ID, got.Name, projID, "Projekt Eins")
+		}
+	})
+
+	t.Run("absent projects decode fine", func(t *testing.T) {
+		secretNoProjects := fmt.Sprintf(`{"id":%q,"organizationId":%q,"key":%q,"value":%q,"note":%q,"read":true,"write":false,"revisionDate":"2026-11-08T10:00:00.000000Z"}`,
+			id, orgID, encKeyField, encValueField, encNote)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.URL.Path == "/organizations/"+orgID+"/secrets":
+				_, _ = w.Write([]byte(`{"object":"secretListView","projects":[],"secrets":[` + secretNoProjects + `],"continuationToken":""}`))
+			case strings.HasPrefix(r.URL.Path, "/secrets/"):
+				_, _ = w.Write([]byte(secretNoProjects))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(srv.Close)
+		fi := newFakeIdentity(t, "", tok, orgKey)
+		c := NewClient(srv.URL, fi.url, tok, orgID)
+		if _, err := c.ListSecrets(t.Context()); err != nil {
+			t.Fatalf("ListSecrets without a projects key: %v", err)
+		}
+		if _, err := c.GetSecretByRef(t.Context(), id); err != nil {
+			t.Fatalf("GetSecretByRef without a projects key: %v", err)
+		}
+	})
+
+	t.Run("empty projects decode fine", func(t *testing.T) {
+		secretEmptyProjects := fmt.Sprintf(`{"id":%q,"organizationId":%q,"key":%q,"value":%q,"note":%q,"read":true,"write":false,"revisionDate":"2026-11-08T10:00:00.000000Z","projects":[]}`,
+			id, orgID, encKeyField, encValueField, encNote)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.URL.Path == "/organizations/"+orgID+"/secrets":
+				_, _ = w.Write([]byte(`{"object":"secretListView","projects":[],"secrets":[` + secretEmptyProjects + `],"continuationToken":""}`))
+			case strings.HasPrefix(r.URL.Path, "/secrets/"):
+				_, _ = w.Write([]byte(secretEmptyProjects))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(srv.Close)
+		fi := newFakeIdentity(t, "", tok, orgKey)
+		c := NewClient(srv.URL, fi.url, tok, orgID)
+		if _, err := c.ListSecrets(t.Context()); err != nil {
+			t.Fatalf("ListSecrets with empty projects: %v", err)
+		}
+		if _, err := c.GetSecretByRef(t.Context(), id); err != nil {
+			t.Fatalf("GetSecretByRef with empty projects: %v", err)
 		}
 	})
 }

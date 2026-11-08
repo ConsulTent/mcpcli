@@ -206,12 +206,17 @@ func bwsTestEncrypt(t *testing.T, plain string, orgKey []byte) string {
 	return "2." + b64(iv) + "|" + b64(ct) + "|" + b64(mac.Sum(nil))
 }
 
-// bwsTestWireSecret encrypts the plaintext fields with the org key.
+// bwsTestWireSecret encrypts the plaintext fields with the org key. Project
+// names ride the same org-key EncString form as the live wire's per-item
+// projects objects.
 func bwsTestWireSecret(t *testing.T, orgKey []byte, s bws.Secret) bws.Secret {
 	t.Helper()
 	s.Key = bwsTestEncrypt(t, s.Key, orgKey)
 	s.Value = bwsTestEncrypt(t, s.Value, orgKey)
 	s.Note = bwsTestEncrypt(t, s.Note, orgKey)
+	for i := range s.Projects {
+		s.Projects[i].Name = bwsTestEncrypt(t, s.Projects[i].Name, orgKey)
+	}
 	return s
 }
 
@@ -226,13 +231,13 @@ func bwsTestSecrets(t *testing.T, orgKey []byte) map[string]bws.Secret {
 			ID: idA, OrganizationID: bwsTestOrgID, Key: "first", Value: "value-a", Note: "note-a",
 			CanRead: true, CanWrite: false,
 			RevisionDate: time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC),
-			Projects:     []string{"aaaaaaaa-0000-0000-0000-000000000000"},
+			Projects:     []bws.Project{{ID: "aaaaaaaa-0000-0000-0000-000000000000", Name: "proj-a"}},
 		},
 		idB: {
 			ID: idB, OrganizationID: bwsTestOrgID, Key: "second", Value: "value-b", Note: "",
 			CanRead: true, CanWrite: true,
 			RevisionDate: time.Date(2026, 11, 8, 11, 0, 0, 0, time.UTC),
-			Projects:     []string{},
+			Projects:     []bws.Project{},
 		},
 	}
 }

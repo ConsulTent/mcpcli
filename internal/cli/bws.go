@@ -321,7 +321,7 @@ func newBWSListCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 					res.Secrets = append(res.Secrets, bwsSecretMeta{
 						ID:           s.ID,
 						Key:          s.Key,
-						ProjectIDs:   bwsNotEmpty(s.Projects),
+						ProjectIDs:   bwsNotEmpty(bwsProjectIDs(s.Projects)),
 						Read:         s.CanRead,
 						Write:        s.CanWrite,
 						RevisionDate: s.RevisionDate,
@@ -337,7 +337,8 @@ func newBWSListCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 // bwsWriteSecretTable renders the metadata table: the house compat.go table
 // conventions — uppercase headers, the Unicode border in Rich and the ASCII
 // border in Plain, grant columns as icons in Rich and ASCII labels in Plain
-// (the statusCell pattern). The project column shows ids.
+// (the statusCell pattern). The project column shows ids (the decoded
+// projects also carry decrypted names; the pinned table stays id-only).
 func bwsWriteSecretTable(w io.Writer, secrets []bws.Secret) error {
 	border := lipgloss.NormalBorder()
 	if ui.Current == ui.Plain {
@@ -345,7 +346,7 @@ func bwsWriteSecretTable(w io.Writer, secrets []bws.Secret) error {
 	}
 	t := table.New().Border(border).Headers("KEY", "READ", "WRITE", "PROJECTS")
 	for _, s := range secrets {
-		t.Row(s.Key, bwsGrantCell(s.CanRead), bwsGrantCell(s.CanWrite), strings.Join(s.Projects, ", "))
+		t.Row(s.Key, bwsGrantCell(s.CanRead), bwsGrantCell(s.CanWrite), strings.Join(bwsProjectIDs(s.Projects), ", "))
 	}
 	return format.WriteTable(w, t)
 }
@@ -363,6 +364,16 @@ func bwsGrantCell(ok bool) string {
 		return ui.IconSuccess
 	}
 	return ui.IconWarn
+}
+
+// bwsProjectIDs extracts the project ids from a decoded secret's projects
+// (the live wire carries {id, name} objects; outputs pin ids only).
+func bwsProjectIDs(projects []bws.Project) []string {
+	ids := make([]string, 0, len(projects))
+	for _, p := range projects {
+		ids = append(ids, p.ID)
+	}
+	return ids
 }
 
 // bwsNotEmpty normalizes a nil project list to the empty slice so the JSON
@@ -460,7 +471,7 @@ func newBWSGetCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 						Key:          sec.Key,
 						Value:        sec.Value,
 						Note:         sec.Note,
-						ProjectIDs:   bwsNotEmpty(sec.Projects),
+						ProjectIDs:   bwsNotEmpty(bwsProjectIDs(sec.Projects)),
 						Read:         sec.CanRead,
 						Write:        sec.CanWrite,
 						RevisionDate: sec.RevisionDate,
