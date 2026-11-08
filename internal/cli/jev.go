@@ -692,6 +692,13 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 	// The connect phase gets one --timeout window, like runWithConnection.
 	cctx, cancel := context.WithTimeout(ctx, f.Timeout)
 	defer cancel()
+	// Secret references resolve before the session opens, on this same
+	// window: the expanded client secret feeds auth.Params below and the
+	// env map (stdio runs only) rides THIS Options construction.
+	env, err := expandSecretRefs(cctx, f, cmd.ErrOrStderr())
+	if err != nil {
+		return res, err
+	}
 	provider, err := auth.ProviderFor(f.Auth)
 	if err != nil {
 		return res, err
@@ -723,6 +730,7 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 		Auth:            f.Auth,
 		ProtocolVersion: f.Protocol,
 		AuthHandler:     handler,
+		Env:             env,
 		Tracer:          tracer,
 		Label:           "jev check",
 	})

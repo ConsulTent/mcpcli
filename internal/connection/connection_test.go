@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -186,8 +187,9 @@ const helperStderrMessage = "helper: intentional stdio failure"
 
 // TestHelperProcess acts as an MCP stdio server subprocess when the test
 // binary is exec'd by TestOpenStdio with helperEnvKey=1, or as a subprocess
-// that dies with a stderr diagnostic when the value is "fail". It returns
-// immediately in a normal test run.
+// that dies with a stderr diagnostic when the value is "fail". An "env:<KEY>"
+// value serves one tool that echoes the child's $KEY — the env-injection
+// probe. It returns immediately in a normal test run.
 func TestHelperProcess(t *testing.T) {
 	switch os.Getenv(helperEnvKey) {
 	case "1":
@@ -201,6 +203,21 @@ func TestHelperProcess(t *testing.T) {
 	case "fail":
 		fmt.Fprintln(os.Stderr, helperStderrMessage)
 		os.Exit(3)
+	default:
+		if key, ok := strings.CutPrefix(os.Getenv(helperEnvKey), "env:"); ok {
+			srv := mcp.NewServer(&mcp.Implementation{Name: "env-echo-server", Version: "0.9.0"}, nil)
+			srv.AddTool(&mcp.Tool{Name: "env", InputSchema: json.RawMessage(`{"type":"object"}`)},
+				func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+					return &mcp.CallToolResult{
+						Content: []mcp.Content{&mcp.TextContent{Text: os.Getenv(key)}},
+					}, nil
+				})
+			if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+				fmt.Fprintf(os.Stderr, "helper env-echo server: %v", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
 	}
 }
 
@@ -298,4 +315,51 @@ func TestSplitCommandQuoting(t *testing.T) {
 	if _, err := shellquote.Split(`prog "unbalanced`); err == nil {
 		t.Fatal("Split() with an unbalanced quote = nil error, want error")
 	}
+}
+
+// helperInjectedKey is the env var the override probe carries: the parent
+// t.Setenv's it AND Options.Env injects it, so the child can only report the
+// injected value when the append-style merge really overrides (os/exec's
+// dedupEnv is last-wins), not merely when the value reaches the child.
+const helperInjectedKey = "GO_MCPCLI_HELPER_INJECTED"
+
+// TestOpenStdioEnvOverride pins Options.Env injection: the spawned stdio
+// child sees the INJECTED value for a KEY the parent also carries —
+// override, not just reach.
+func TestOpenStdioEnvOverride(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() error: %v", err)
+	}
+	// The child runs only TestHelperProcess in its env-echo mode, echoing
+	// $GO_MCPCLI_HELPER_INJECTED back through the env tool.
+	t.Setenv(helperEnvKey, "env:"+helperInjectedKey)
+	t.Setenv(helperInjectedKey, "inherited-value")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	session, err := Open(ctx, &Options{
+		Command:         shellquote.Join(exe, "-test.run=TestHelperProcess"),
+		ProtocolVersion: "auto",
+		Env:             map[string]string{helperInjectedKey: "injected-value"},
+	})
+	if err != nil {
+		t.Fatalf("Open() stdio error: %v", err)
+	}
+	defer session.Close()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "env", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool(env): %v", err)
+	}
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			if tc.Text != "injected-value" {
+				t.Fatalf("child sees %s=%q, want the injected \"injected-value\"", helperInjectedKey, tc.Text)
+			}
+			return
+		}
+	}
+	t.Fatalf("CallTool(env) returned no text content: %+v", res.Content)
 }

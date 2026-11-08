@@ -56,6 +56,14 @@ func newAuthLoginCommand(g *GlobalFlags) *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), g.Timeout)
 			defer cancel()
 
+			// The third expansion consumer: a bws:// ref in --client-secret
+			// resolves before the OAuth params are built, so the token
+			// exchange carries the resolved secret. Auth login spawns no
+			// child, so no --env map is built or used.
+			if _, err := expandSecretRefs(ctx, g, errOut); err != nil {
+				return err
+			}
+
 			provider, err := auth.ProviderFor("oauth")
 			if err != nil {
 				return err

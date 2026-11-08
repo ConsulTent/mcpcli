@@ -53,6 +53,14 @@ func runWithConnection(ctx context.Context, f *GlobalFlags, errOut io.Writer, fn
 	ctx, cancel := context.WithTimeout(ctx, f.Timeout)
 	defer cancel()
 
+	// Secret references resolve before anything connects: the expanded
+	// client secret feeds auth.Params below, and the env map (stdio runs
+	// only) rides both connection.Options constructions.
+	env, err := expandSecretRefs(ctx, f, errOut)
+	if err != nil {
+		return err
+	}
+
 	buildStart := time.Now()
 	provider, err := auth.ProviderFor(f.Auth)
 	if err != nil {
@@ -84,6 +92,7 @@ func runWithConnection(ctx context.Context, f *GlobalFlags, errOut io.Writer, fn
 			Auth:            f.Auth,
 			ProtocolVersion: f.Protocol,
 			AuthHandler:     handler,
+			Env:             env,
 			Tracer:          tracer,
 			Label:           "connect",
 		})
@@ -95,6 +104,7 @@ func runWithConnection(ctx context.Context, f *GlobalFlags, errOut io.Writer, fn
 				Auth:            f.Auth,
 				ProtocolVersion: f.Protocol,
 				AuthHandler:     handler,
+				Env:             env,
 			})
 			return err
 		})

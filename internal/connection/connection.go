@@ -3,6 +3,7 @@ package connection
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -28,6 +29,12 @@ type Options struct {
 	// it from internal/auth; stdio connections reject it because a spawned
 	// subprocess has no HTTP surface to authorize.
 	AuthHandler sdkauth.OAuthHandler
+
+	// Env, when non-empty, is injected into a stdio child's environment:
+	// os.Environ() as the base with these pairs appended — os/exec's
+	// dedupEnv keeps the LAST occurrence of a KEY, so an injected KEY
+	// overrides the inherited one. HTTP transports ignore it.
+	Env map[string]string
 
 	// Tracer, when non-nil, collects per-call round-trip timing for the run:
 	// Open registers its middleware on the client before Connect and starts
@@ -212,6 +219,17 @@ func transportFor(o *Options) (mcp.Transport, *stdioCapture, error) {
 			return nil, nil, fmt.Errorf("resolving --command %q: %w", argv[0], lookErr)
 		}
 		cmd := &exec.Cmd{Path: path, Args: argv}
+		if len(o.Env) > 0 {
+			// Append-style merge, no map machinery: the parent environment
+			// is the base and the injected pairs are appended after it —
+			// exec's dedupEnv is last-wins, so an injected KEY overrides
+			// the inherited one.
+			env := os.Environ()
+			for key, value := range o.Env {
+				env = append(env, key+"="+value)
+			}
+			cmd.Env = env
+		}
 		capture := &stdioCapture{cmd: cmd, stderr: &stderrBuffer{}}
 		cmd.Stderr = capture.stderr
 		return &mcp.CommandTransport{Command: cmd}, capture, nil
