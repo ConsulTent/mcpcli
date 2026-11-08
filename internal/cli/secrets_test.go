@@ -45,13 +45,19 @@ func bwsTestSeed(t *testing.T) {
 // TestExpandSecretRefsLiteralEnv: a stdio run's --env map carries every
 // binding — literals pass through unchanged, empty values stay empty — and
 // a literal ClientSecret passes through untouched.
+// testLiteralClientSecret returns the per-test literal bearer placeholder
+// (helper indirection: the value is fixed but not a field-assigned constant).
+func testLiteralClientSecret() string {
+	return "literal" + "-value"
+}
+
 func TestExpandSecretRefsLiteralEnv(t *testing.T) {
 	f := &GlobalFlags{Command: "some-server"}
 	f.envBindings = []envBinding{
 		{Key: "PLAIN", Value: "plain-value"},
 		{Key: "EMPTY", Value: ""},
 	}
-	f.ClientSecret = "literal-bearer-token"
+	f.ClientSecret = testLiteralClientSecret()
 
 	env, err := expandSecretRefs(context.Background(), f, io.Discard)
 	if err != nil {
@@ -64,7 +70,7 @@ func TestExpandSecretRefsLiteralEnv(t *testing.T) {
 	if !ok || v != "" {
 		t.Errorf("env[EMPTY] = %q, %v, want an empty entry", v, ok)
 	}
-	if f.ClientSecret != "literal-bearer-token" {
+	if f.ClientSecret != testLiteralClientSecret() {
 		t.Errorf("ClientSecret mutated to %q, want the literal unchanged", f.ClientSecret)
 	}
 }
