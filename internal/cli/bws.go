@@ -177,10 +177,14 @@ func newBWSLoginCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 			}
 			orgState := "org " + orgID
 			if orgID == "" {
+				// The line enumerates the WHOLE degraded set: an empty OrgID
+				// disables both name refs and bws list (both fail closed
+				// pre-URL), and the at-login report must say so or the
+				// degraded credential stops being visible at login.
 				if ui.Current == ui.Plain {
-					orgState = "no org - name refs disabled"
+					orgState = "no org - name refs and bws list disabled"
 				} else {
-					orgState = "no org — name refs disabled"
+					orgState = "no org — name refs and bws list disabled"
 				}
 			}
 			ui.Step(errOut, "machine account %s", id)

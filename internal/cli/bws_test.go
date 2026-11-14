@@ -475,13 +475,16 @@ func TestBWSLogin401SentinelTail(t *testing.T) {
 // TestBWSLoginNoOrgStateVariants pins the no-org login state's two
 // spellings: the em-dash line in Rich and the ASCII-hyphen line in --plain
 // (the byte-ASCII contract applies to this string too) — never the other
-// variant in either mode.
+// variant in either mode. The line enumerates the WHOLE degraded set: an
+// empty OrgID disables both name refs and bws list (mo pass-5), and the
+// at-login report must say so or the degraded credential stops being
+// visible at login.
 func TestBWSLoginNoOrgStateVariants(t *testing.T) {
 	bwsTestTokenDir(t)
 	fi := newBWSTestIdentity(t)
 	fa := newBWSTestAPI(t, bwsTestOrgKey(t), map[string]bws.Secret{})
-	const richLine = "no org — name refs disabled"  // em dash
-	const plainLine = "no org - name refs disabled" // ASCII hyphen
+	const richLine = "no org — name refs and bws list disabled"  // em dash
+	const plainLine = "no org - name refs and bws list disabled" // ASCII hyphen
 
 	// Rich (default mode).
 	stderr := bwsTestLogin(t, fa.url, fi.url) // no --org
@@ -506,6 +509,27 @@ func TestBWSLoginNoOrgStateVariants(t *testing.T) {
 	bwsTestAssertASCII(t, "plain login stdout", stdout)
 	bwsTestAssertASCII(t, "plain login stderr", stderr)
 	bwsTestAssertASCII(t, "plain login decoration", dec)
+
+	// --json: the same degraded login reports org_id PRESENT and empty
+	// (constant key set). Characterization pin, green-on-arrival — the
+	// shape shipped with the login --json document.
+	stdout, _, _, err = runRoot(t, "--json", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
+	if err != nil {
+		t.Fatalf("json login: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
+		t.Fatalf("json login stdout %q is not JSON: %v", stdout, err)
+	}
+	orgRaw, ok := raw["org_id"]
+	if !ok {
+		t.Fatalf("json login document lacks org_id: %s", stdout)
+	}
+	var orgID string
+	_ = json.Unmarshal(orgRaw, &orgID)
+	if orgID != "" {
+		t.Errorf("json login org_id = %q, want present and empty", orgID)
+	}
 }
 
 // --- logout ---
@@ -523,6 +547,40 @@ func TestBWSLogoutRemovesEntry(t *testing.T) {
 	}
 	if _, err := bws.ResolveCredential(""); err == nil || !strings.Contains(err.Error(), "no Bitwarden instance is logged in") {
 		t.Errorf("cache after logout = %v, want the no-instance error", err)
+	}
+}
+
+// TestBWSLogoutSingleEntryAfterLogin pins the run155 cell of the logout
+// table through the real login path (not an offline seed): one live login
+// leaves exactly one cached instance, and a bare logout — no --api-url —
+// deletes it; a second logout hits the zero-entry idempotent success.
+// Characterization pin, green-on-arrival: the cell shipped with the v1.4.0
+// logout table; this closes the run155/156 fold by pinning it.
+func TestBWSLogoutSingleEntryAfterLogin(t *testing.T) {
+	bwsTestTokenDir(t)
+	fi := newBWSTestIdentity(t)
+	fa := newBWSTestAPI(t, bwsTestOrgKey(t), map[string]bws.Secret{})
+
+	bwsTestLogin(t, fa.url, fi.url) // one live login, no --org
+
+	_, stderr, _, err := runRoot(t, "bws", "logout")
+	if err != nil {
+		t.Fatalf("bws logout after one login: %v", err)
+	}
+	if !strings.Contains(stderr, "logged out of "+fa.url) {
+		t.Errorf("logout stderr %q does not name the logged-in instance", stderr)
+	}
+	if _, err := bws.ResolveCredential(""); err == nil {
+		t.Error("cache not empty after logout")
+	}
+
+	// The second logout: nothing left to forget, still a success.
+	_, stderr, _, err = runRoot(t, "bws", "logout")
+	if err != nil {
+		t.Fatalf("second bws logout: %v", err)
+	}
+	if !strings.Contains(stderr, "no Bitwarden instance was cached") {
+		t.Errorf("second logout stderr %q does not report the idempotent no-cache success", stderr)
 	}
 }
 
