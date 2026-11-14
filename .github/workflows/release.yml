@@ -32,6 +32,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          # Checkout with the PAT: actions/checkout persists its token in
+          # git's http extraheader, which OVERRIDES credentials embedded in
+          # the remote URL — with the default token and permissions: {} the
+          # push steps 403 as github-actions[bot] (first live sync-only run,
+          # 2026-11-14). release-build.yml's tap checkout already does this.
+          token: ${{ secrets.GH_PAT }}
 
       - name: Decide
         id: decide
