@@ -584,6 +584,9 @@ func TestNormalizeURL(t *testing.T) {
 		{"protocol-relative", "//api.example.com", ""},
 		{"relative", "/api", ""},
 		{"empty", "", ""},
+		{"empty host", "https://", ""},
+		{"empty host with http port", "http://:8080", ""},
+		{"empty host with https port", "https://:0", ""},
 		{"userinfo", "https://user:secret@api.example.com", ""},
 		{"query", "https://api.example.com/path?x=1", ""},
 		{"fragment", "https://api.example.com/path#frag", ""},
@@ -841,6 +844,43 @@ func TestExchange2xxShapeErrorWithoutBody(t *testing.T) {
 	if strings.Contains(err.Error(), "SECRET-BODY-MARKER") {
 		t.Errorf("2xx parse-failure error leaks the body: %q", err)
 	}
+}
+
+func TestExchangeMissingEncryptedPayload(t *testing.T) {
+	tok, _, _, _ := dummyAccessToken(t)
+	orgKey := testOrgKey(t)
+	fi := newFakeIdentity(t, "", tok, orgKey)
+	// A 2xx envelope that decodes but carries only the access_token leg: an
+	// absent or renamed encrypted_payload must be named as the missing field.
+	fi.forceResponse(http.StatusOK, `{"access_token":"x"}`)
+
+	t.Run("exchange names the missing field", func(t *testing.T) {
+		c := NewClient("https://api.invalid", fi.url, tok, "")
+		_, err := c.Exchange(t.Context())
+		if err == nil {
+			t.Fatal("2xx envelope without encrypted_payload: nil error")
+		}
+		if !strings.Contains(err.Error(), "carries no encrypted_payload") {
+			t.Errorf("error %q does not name the missing encrypted_payload", err)
+		}
+	})
+
+	t.Run("orgKey does not blame the ciphertext", func(t *testing.T) {
+		// The zero EncString must never reach decryptEncString, whose "has
+		// no type prefix" shape error misattributes a missing field to
+		// corruption.
+		c := NewClient("https://api.invalid", fi.url, tok, "")
+		_, err := c.orgKey(t.Context())
+		if err == nil {
+			t.Fatal("orgKey over an envelope without encrypted_payload: nil error")
+		}
+		if !strings.Contains(err.Error(), "carries no encrypted_payload") {
+			t.Errorf("error %q does not name the missing encrypted_payload", err)
+		}
+		if strings.Contains(err.Error(), "type prefix") {
+			t.Errorf("error %q misattributes the missing field to ciphertext corruption", err)
+		}
+	})
 }
 
 func TestGetSecretByRef(t *testing.T) {

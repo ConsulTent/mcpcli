@@ -27,18 +27,20 @@ import (
 )
 
 // NormalizeURL canonicalizes an instance base URL for both the API and the
-// identity endpoints. An absolute URL with an http/https scheme is
-// required; trailing slashes are trimmed, the host is lowercased and the
-// scheme's own default port is stripped (443 for https, 80 for http —
-// scheme-matched, so :443 on http survives); a path prefix is kept. URLs
-// carrying userinfo or a query/fragment are rejected (fail-closed-minimal).
+// identity endpoints. An absolute URL with an http/https scheme and a
+// non-empty hostname is required; trailing slashes are trimmed, the host is
+// lowercased and the scheme's own default port is stripped (443 for https,
+// 80 for http — scheme-matched, so :443 on http survives); a path prefix is
+// kept. URLs carrying userinfo, a query/fragment, or an empty hostname —
+// bare or port-bearing, e.g. http://:8080 — are rejected
+// (fail-closed-minimal; an empty hostname would dial the local system).
 // There is no scheme defaulting and no hostname rewriting.
 func NormalizeURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("invalid URL %q: %w", raw, err)
 	}
-	if u.Scheme == "" || u.Host == "" {
+	if u.Scheme == "" || u.Hostname() == "" {
 		return "", fmt.Errorf("invalid URL %q: an absolute URL is required, e.g. https://api.bitwarden.com or https://vault.bitwarden.eu/api", raw)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
@@ -305,6 +307,9 @@ func (c *Client) Exchange(ctx context.Context) (*TokenResponse, error) {
 	}
 	if tr.AccessToken == "" {
 		return nil, fmt.Errorf("bws: the exchange response carries no access_token (status %s)", resp.Status)
+	}
+	if tr.EncryptedPayload == "" {
+		return nil, fmt.Errorf("bws: the exchange response carries no encrypted_payload (status %s)", resp.Status)
 	}
 	return &tr, nil
 }
