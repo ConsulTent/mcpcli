@@ -350,7 +350,9 @@ func bwsWriteSecretTable(w io.Writer, secrets []bws.Secret) error {
 	}
 	t := table.New().Border(border).Headers("KEY", "READ", "WRITE", "PROJECTS")
 	for _, s := range secrets {
-		t.Row(s.Key, bwsGrantCell(s.CanRead), bwsGrantCell(s.CanWrite), strings.Join(bwsProjectIDs(s.Projects), ", "))
+		// The decrypted name is server-supplied: sanitize at the render call
+		// (the --json twin keeps the raw name — data delivery).
+		t.Row(sanitizeNote(s.Key), bwsGrantCell(s.CanRead), bwsGrantCell(s.CanWrite), strings.Join(bwsProjectIDs(s.Projects), ", "))
 	}
 	return format.WriteTable(w, t)
 }

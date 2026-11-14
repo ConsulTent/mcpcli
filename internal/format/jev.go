@@ -14,7 +14,10 @@ import (
 // JevVerdicts renders one line per verdict, data-driven: a field renders only
 // when the server supplied it, and plain mode swaps the middle-dot separator
 // for "|" so the output stays byte-ASCII. Rich and plain share the same line
-// shapes — escalation is data (exit semantics live in the caller).
+// shapes — escalation is data (exit semantics live in the caller). Every
+// server-supplied string rides safePrint per-write, BEFORE concatenation —
+// an end-of-line pass would strip the rich-mode separator — so a hostile
+// verdict field cannot carry escapes while floats and enums render as-is.
 func JevVerdicts(w io.Writer, verdicts []jev.Verdict, plain bool) error {
 	sep := " · "
 	if plain {
@@ -28,14 +31,14 @@ func JevVerdicts(w io.Writer, verdicts []jev.Verdict, plain bool) error {
 		case float64:
 			b.WriteString(formatFloat(a))
 		case string:
-			b.WriteString(a)
+			b.WriteString(safePrint(a))
 		default:
 			// Parse enforces per-op answer typing, so this arm is
 			// unreachable for parsed verdicts.
 			b.WriteString("(unrenderable answer)")
 		}
 		if v.Label != "" {
-			b.WriteString(" " + v.Label)
+			b.WriteString(" " + safePrint(v.Label))
 		}
 		if v.Confidence != nil {
 			b.WriteString(sep + "confidence " + formatFloat(*v.Confidence))
@@ -50,18 +53,22 @@ func JevVerdicts(w io.Writer, verdicts []jev.Verdict, plain bool) error {
 			b.WriteString(sep + "safe_to_apply " + formatFloat(*v.SafeToApply))
 		}
 		if len(v.ReasonCodes) > 0 {
-			b.WriteString(sep + "reason_codes " + strings.Join(v.ReasonCodes, ","))
+			codes := make([]string, len(v.ReasonCodes))
+			for i, c := range v.ReasonCodes {
+				codes[i] = safePrint(c)
+			}
+			b.WriteString(sep + "reason_codes " + strings.Join(codes, ","))
 		}
 		if v.Escalate {
 			b.WriteString(sep + "ESCALATE")
 			if v.Reason != "" {
-				b.WriteString(" (" + v.Reason + ")")
+				b.WriteString(" (" + safePrint(v.Reason) + ")")
 			}
 			if v.Hint != "" {
-				b.WriteString(": " + v.Hint)
+				b.WriteString(": " + safePrint(v.Hint))
 			}
 		} else if v.Hint != "" {
-			b.WriteString(sep + v.Hint)
+			b.WriteString(sep + safePrint(v.Hint))
 		}
 		b.WriteByte('\n')
 		if _, err := fmt.Fprint(w, b.String()); err != nil {
@@ -77,20 +84,22 @@ func formatFloat(f float64) string {
 }
 
 // joinProbabilities renders a distribution deterministically: keys sorted,
-// each as "key p" — map iteration order must never reach the output.
+// each as "key p" — map iteration order must never reach the output, and the
+// server-supplied key rides safePrint.
 func joinProbabilities(p map[string]float64) string {
 	parts := make([]string, 0, len(p))
 	for _, k := range slices.Sorted(maps.Keys(p)) {
-		parts = append(parts, k+" "+formatFloat(p[k]))
+		parts = append(parts, safePrint(k)+" "+formatFloat(p[k]))
 	}
 	return strings.Join(parts, " / ")
 }
 
-// joinLegend renders a score legend as sorted index=label pairs.
+// joinLegend renders a score legend as sorted index=label pairs, with both
+// the server-supplied keys and values through safePrint.
 func joinLegend(l map[string]string) string {
 	parts := make([]string, 0, len(l))
 	for _, k := range slices.Sorted(maps.Keys(l)) {
-		parts = append(parts, k+"="+l[k])
+		parts = append(parts, safePrint(k)+"="+safePrint(l[k]))
 	}
 	return "legend " + strings.Join(parts, ", ")
 }

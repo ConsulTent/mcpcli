@@ -151,6 +151,47 @@ func TestClientSecretEnvNoWarning(t *testing.T) {
 	}
 }
 
+// plainHTTPURLWarning is the unencrypted-transport warning the root's
+// PersistentPreRunE prints when --url is plain http AND a credential is in
+// play (--auth beyond none, or the auth-login exchange) — the --url twin of
+// the BWS instance warning, written straight to os.Stderr in every mode.
+const plainHTTPURLWarning = "warning: --url is plain http; the credential sent to it travels unencrypted"
+
+// TestPlainHTTPURLWarning pins the warning matrix: both spellings of the
+// scheme warn under --auth bearer (url.Parse lowercases the scheme, so the
+// check must too); https stays silent; plain http without credentials stays
+// silent even when a literal --client-secret rides argv — that run warns
+// about argv visibility, and the raw flag layer sends nothing under
+// --auth none.
+func TestPlainHTTPURLWarning(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantWarned bool
+	}{
+		{"http url with auth bearer", []string{"--url", "http://example.invalid/mcp", "--auth", "bearer"}, true},
+		{"uppercase scheme is still plain http", []string{"--url", "HTTP://example.invalid/mcp", "--auth", "bearer"}, true},
+		{"https stays silent", []string{"--url", "https://example.invalid/mcp", "--auth", "bearer"}, false},
+		{"http with auth none and literal secret stays silent", []string{"--url", "http://example.invalid/mcp", "--client-secret", "literal-token"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			readStderr := captureOSStderr(t)
+			// No subcommand: the root runs Help() after its hook fires, so
+			// the warning region executes without any connection attempt.
+			_, _, _, err := runRoot(t, tc.args...)
+			if err != nil {
+				t.Fatalf("bare root run: %v", err)
+			}
+			if got := strings.Count(readStderr(), plainHTTPURLWarning); tc.wantWarned && got != 1 {
+				t.Fatalf("plain-http warning count = %d, want exactly 1", got)
+			} else if !tc.wantWarned && got != 0 {
+				t.Fatalf("plain-http warning fired %d time(s), want silent", got)
+			}
+		})
+	}
+}
+
 // TestRootEnvSyntaxErrors pins the golden --env parse errors in the exact
 // args.go house form, byte-exact, on any command (the root hook is the one
 // parse site for the flag).

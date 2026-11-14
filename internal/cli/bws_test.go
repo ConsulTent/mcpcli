@@ -723,6 +723,37 @@ func TestBWSListE2E(t *testing.T) {
 	}
 }
 
+// TestBWSListHostileKeySanitized plants the escape payload in a decrypted
+// secret name: the KEY cell renders the operator's own name, so it filters
+// control runes like every other render sink — while the name's printable
+// residue survives.
+func TestBWSListHostileKeySanitized(t *testing.T) {
+	bwsTestTokenDir(t)
+	orgKey := bwsTestOrgKey(t)
+	fi := newBWSTestIdentity(t)
+	fa := newBWSTestAPI(t, orgKey, map[string]bws.Secret{
+		"11111111-2222-3333-4444-555555555555": {
+			ID: "11111111-2222-3333-4444-555555555555", OrganizationID: bwsTestOrgID,
+			Key: "ci" + hostileESC + "key", Value: "value-a", Note: "",
+			CanRead: true, CanWrite: false,
+			RevisionDate: time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC),
+			Projects:     []bws.Project{},
+		},
+	})
+	bwsTestLogin(t, fa.url, fi.url, "--org", bwsTestOrgID)
+
+	stdout, _, _, err := runRoot(t, "bws", "list", "--api-url", fa.url)
+	if err != nil {
+		t.Fatalf("bws list: %v", err)
+	}
+	assertNoESC(t, "list stdout", stdout)
+	for _, want := range []string{"ci", "key"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("list stdout %q drops the name's printable residue %q", stdout, want)
+		}
+	}
+}
+
 func TestBWSListJSON(t *testing.T) {
 	bwsTestTokenDir(t)
 	fi := newBWSTestIdentity(t)

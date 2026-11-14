@@ -288,6 +288,11 @@ line; prefer the MCPCLI_BWS_ACCESS_TOKEN environment variable`. A value that
 is itself a `bws://` reference (any letter case) never reaches argv as
 plaintext and stays silent; an empty `--env` value stays silent too.
 
+A credential sent to a plain-http `--url` also warns: the token travels
+unencrypted (`warning: --url is plain http; the credential sent to it
+travels unencrypted`, any `--auth` mode beyond `none` or the `auth login`
+exchange; loopback/self-hosted http remains a deliberate supported trade).
+
 The `oauth` flow itself needs no credentials — it falls back to dynamic client
 registration.
 

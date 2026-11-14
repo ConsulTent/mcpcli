@@ -43,6 +43,21 @@ func runRoot(t *testing.T, args ...string) (stdout, stderr, decoration string, e
 	return out.String(), errBuf.String(), dec.String(), err
 }
 
+// hostileESC is the planted terminal-escape payload every human-mode render
+// sink must strip: an OSC title-setter plus a color-introducer, the two
+// shapes a server-controlled string could use to hijack the operator's
+// terminal.
+const hostileESC = "\x1b]0;pwned\x07\x1b[31m"
+
+// assertNoESC fails when s carries the ANSI escape byte (0x1b) — the hostile
+// byte the printable-character filters must strip from server-supplied text.
+func assertNoESC(t *testing.T, name, s string) {
+	t.Helper()
+	if i := strings.IndexByte(s, 0x1b); i >= 0 {
+		t.Fatalf("%s has an ESC byte at offset %d: %q", name, i, s)
+	}
+}
+
 // TestRunWithConnectionTarget pins the target enforcement the shared runner
 // applies before anything else, so connection commands fail fast without
 // touching the network while auth logout stays offline-capable.

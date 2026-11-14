@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
@@ -495,7 +496,13 @@ func runJevOp(ctx context.Context, session *mcp.ClientSession, out, errOut io.Wr
 		return err
 	}
 	if adapter == nil {
-		return fmt.Errorf("no known Jev flavor detected (jev tools present: %s)", strings.Join(toolNames, ", "))
+		// Server-supplied names: filter each before the Join so a hostile
+		// tool name cannot carry escapes into the exit-1 error text.
+		names := make([]string, 0, len(toolNames))
+		for _, name := range toolNames {
+			names = append(names, sanitizeNote(name))
+		}
+		return fmt.Errorf("no known Jev flavor detected (jev tools present: %s)", strings.Join(names, ", "))
 	}
 	for _, warning := range droppedFlagWarnings(adapter.Name(), op, setFlags) {
 		_, _ = fmt.Fprintln(errOut, warning)
@@ -666,28 +673,34 @@ func resultErrorText(res *mcp.CallToolResult) string {
 	return "tool returned an error"
 }
 
-// sanitizeNote renders an adapter note for an error message: printable ASCII
-// only, whitespace collapsed, capped like shortError — so nothing exotic can
-// reach the message even if a future note grows server-supplied text.
+// sanitizeNote renders untrusted text for an error message or table cell:
+// printable Unicode per unicode.IsPrint, control/bidi/zero-width runes
+// collapsed to a single space, capped at 160 runes — so nothing exotic can
+// reach the output while the operator's own non-ASCII text survives. Only a
+// trailing collapsed space is trimmed: a leading one cannot occur, so
+// legitimate edge whitespace in the operator's own text renders intact. The
+// format package's safePrint is the twin of this helper (format must not
+// import internal/cli).
 func sanitizeNote(note string) string {
 	var b strings.Builder
 	space := false
+	written := 0
 	for _, r := range note {
 		switch {
-		case r >= 0x20 && r <= 0x7e:
-			b.WriteByte(byte(r))
+		case unicode.IsPrint(r):
+			b.WriteRune(r)
 			space = false
-		default:
-			if !space && b.Len() > 0 {
-				b.WriteByte(' ')
-				space = true
-			}
+			written++
+		case !space && written > 0:
+			b.WriteByte(' ')
+			space = true
+			written++
 		}
-		if b.Len() >= 160 {
-			return strings.TrimSpace(b.String()[:160]) + "..."
+		if written >= 160 {
+			return strings.TrimRight(b.String(), " ") + "..."
 		}
 	}
-	return strings.TrimSpace(b.String())
+	return strings.TrimRight(b.String(), " ")
 }
 
 // runJevCheck performs the whole check: open one session (honoring --auth,
@@ -991,7 +1004,10 @@ func writeJevCheckReport(w io.Writer, res checkResult) error {
 	}
 	bt := table.New().Border(border).Headers("TOOL", "STATUS", "DETAIL")
 	for _, row := range res.Probes {
-		bt.Row(row.Tool, probeStatusCell(row.Status), row.Detail)
+		// The tool name is server-supplied: filter at the render call so
+		// every arm (skip rows and battery-aborted rows alike) is covered,
+		// while the --json probes[].tool fields keep the raw names.
+		bt.Row(sanitizeNote(row.Tool), probeStatusCell(row.Status), row.Detail)
 	}
 	if err := format.WriteTable(w, bt); err != nil {
 		return err

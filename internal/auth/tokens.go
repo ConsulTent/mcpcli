@@ -24,7 +24,15 @@ var TokenDir = defaultTokenDir()
 func defaultTokenDir() string {
 	base, err := os.UserConfigDir()
 	if err != nil {
-		base = os.TempDir()
+		// Degraded state no supported deployment reaches (UserConfigDir
+		// fails only when the platform's config-dir environment is unset):
+		// emit one stderr line so the fallback — and the cache's new,
+		// more-shared location — stays visible. The two-value discard is
+		// deliberate: this runs from a package initializer with no error
+		// path to plumb (the lint-ruling emission form).
+		dir := filepath.Join(os.TempDir(), ".mcpcli")
+		_, _ = fmt.Fprintln(os.Stderr, "warning: credential cache directory fell back to "+dir+" because os.UserConfigDir() failed")
+		return dir
 	}
 	return filepath.Join(base, ".mcpcli")
 }

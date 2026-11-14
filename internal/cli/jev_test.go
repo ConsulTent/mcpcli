@@ -857,3 +857,81 @@ func TestJevInteractiveRejection(t *testing.T) {
 		t.Fatal("-i jev ask accepted, want the interactive rejection")
 	}
 }
+
+// TestJevAskHostileLabelSanitized plants the escape payload in a verdict
+// field (the noul label) and asserts the human-mode verdict line carries no
+// ESC byte — the format layer filters every server-supplied string it
+// renders, while the label's printable residue survives.
+func TestJevAskHostileLabelSanitized(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, func(s *mcp.Server) {
+		// Two core tools, the minimum jkudish signature. The noul label
+		// carries the payload with JSON \u escapes (raw control bytes are
+		// not legal inside JSON string literals).
+		s.AddTool(&mcp.Tool{Name: "jev_noul", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"probability": 0.97, "label": "\u001b]0;pwned\u0007\u001b[31mlikely"}`}}}, nil
+			})
+		s.AddTool(&mcp.Tool{Name: "jev_verify", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"results": [{"verdict": "verified"}]}`}}}, nil
+			})
+	})
+	stdout, _, _, err := runRoot(t, "--url", srv.URL, "jev", "ask", "2+2=4?")
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	assertNoESC(t, "ask stdout", stdout)
+	if !strings.Contains(stdout, "likely") {
+		t.Errorf("ask stdout %q drops the label's printable residue", stdout)
+	}
+}
+
+// TestJevCheckHostileDetailAndToolSanitized plants the payload twice in one
+// battery: a JSON-RPC error message (the DETAIL cell via shortError) and an
+// unmatched tool name (the TOOL cell at the render call) — the same table
+// must sanitize both columns.
+func TestJevCheckHostileDetailAndToolSanitized(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, func(s *mcp.Server) {
+		s.AddTool(&mcp.Tool{Name: "jev_judge", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return nil, errors.New("judge failed: " + hostileESC)
+			})
+		s.AddTool(&mcp.Tool{Name: "jev_gate", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"decision": "allow"}`}}}, nil
+			})
+		// jev_-prefixed but in no flavor's vocabulary: an unmatched skip row
+		// whose server-supplied NAME renders in the TOOL cell.
+		s.AddTool(&mcp.Tool{Name: "jev_" + hostileESC + "extra", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{}`}}}, nil
+			})
+	})
+	stdout, _, _, err := runRoot(t, "--url", srv.URL, "jev", "check", "--probe")
+	if err == nil {
+		t.Fatal("check --probe with an erroring probe = nil error, want exit 1 after the report prints")
+	}
+	assertNoESC(t, "check stdout", stdout)
+	if !strings.Contains(stdout, "judge failed") {
+		t.Errorf("check stdout %q drops the error's printable residue", stdout)
+	}
+}
+
+// TestJevNoFlavorJoinSanitized pins the no-flavor error's name Join: an
+// inventory whose only jev_* name carries the payload must not leak it into
+// the exit-1 error text (a distinct fixture from the battery TOOL cell — one
+// fixture cannot exercise both branches).
+func TestJevNoFlavorJoinSanitized(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, func(s *mcp.Server) {
+		s.AddTool(&mcp.Tool{Name: "jev_" + hostileESC + "solo", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{}`}}}, nil
+			})
+	})
+	_, stderr, _, err := runRoot(t, "--url", srv.URL, "jev", "ask", "q?")
+	if err == nil || !strings.Contains(err.Error(), "no known Jev flavor detected") {
+		t.Fatalf("ask against a non-matching inventory = %v, want the no-flavor error", err)
+	}
+	assertNoESC(t, "no-flavor error", err.Error())
+	assertNoESC(t, "ask stderr", stderr)
+}

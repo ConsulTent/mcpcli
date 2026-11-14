@@ -180,6 +180,17 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 			if g.ClientSecret != "" && !resolver.Recognizes(g.ClientSecret) {
 				_, _ = fmt.Fprintln(os.Stderr, "warning: --client-secret was passed on the command line; prefer bws:// references or MCPCLI_CLIENT_SECRET")
 			}
+			// Functional security note, not mode-gated decoration: a credential
+			// (bearer secret, client-credentials, oauth token, or the
+			// auth-login exchange) sent to a plain-http URL travels
+			// unencrypted — the same no-blocklist ruling as the BWS instance
+			// warning. The scheme check lowercases because url.Parse does
+			// (HTTP:// transports plaintext past a raw-prefix test); the
+			// predicate is the raw flag layer only — env secrets merge later
+			// in ResolveCredentials, and --auth none sends nothing.
+			if strings.HasPrefix(strings.ToLower(g.URL), "http://") && (g.Auth != "none" || isAuthLogin) {
+				_, _ = fmt.Fprintln(os.Stderr, "warning: --url is plain http; the credential sent to it travels unencrypted")
+			}
 			if _, err := auth.ProviderFor(g.Auth); err != nil {
 				return fmt.Errorf("invalid value for --auth: %w", err)
 			}

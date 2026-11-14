@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
@@ -133,6 +134,36 @@ func safeMIME(s string) string {
 		}
 	}
 	return string(b)
+}
+
+// safePrint keeps only printable Unicode and caps length, mirroring the
+// CLI's sanitizeNote (format must not import internal/cli — the two are
+// named siblings). unicode.IsPrint drops control, bidi and zero-width runes
+// — a server-controlled string cannot carry ANSI escapes into the rendered
+// line — while the operator's own non-ASCII text survives; dropped runes
+// collapse to a single space, capped at 160 runes. Only a trailing collapsed
+// space is trimmed: a leading one cannot occur, so legitimate edge
+// whitespace in the operator's own text renders intact.
+func safePrint(s string) string {
+	var b strings.Builder
+	space := false
+	written := 0
+	for _, r := range s {
+		switch {
+		case unicode.IsPrint(r):
+			b.WriteRune(r)
+			space = false
+			written++
+		case !space && written > 0:
+			b.WriteByte(' ')
+			space = true
+			written++
+		}
+		if written >= 160 {
+			return strings.TrimRight(b.String(), " ") + "..."
+		}
+	}
+	return strings.TrimRight(b.String(), " ")
 }
 
 // ResourcesList renders resources/list and resources/templates/list results as

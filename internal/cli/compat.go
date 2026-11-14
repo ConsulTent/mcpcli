@@ -307,11 +307,8 @@ func statusCell(status string) string {
 }
 
 // shortError collapses an error to a single bounded line for the detail
-// column: its first line, cut to 160 characters.
+// column: its first line through sanitizeNote (printable Unicode, collapsed
+// whitespace, 160-rune cap) — server JSON-RPC error text is untrusted.
 func shortError(err error) string {
-	msg := strings.SplitN(strings.TrimSpace(err.Error()), "\n", 2)[0]
-	if r := []rune(msg); len(r) > 160 {
-		msg = string(r[:160]) + "..."
-	}
-	return msg
+	return sanitizeNote(strings.SplitN(strings.TrimSpace(err.Error()), "\n", 2)[0])
 }
