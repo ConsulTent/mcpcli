@@ -53,9 +53,9 @@ jobs:
           {
             echo "count=$COUNT"
             echo "since=$SINCE"
-            echo "titles<<EOF"
+            echo "titles<<MCPRLS_TITLES_7f3d"
             echo "$TITLES"
-            echo "EOF"
+            echo "MCPRLS_TITLES_7f3d"
           } >> "$GITHUB_OUTPUT"
           echo "== $COUNT dependency merges since $SINCE, $CVES CVE-flagged, reason=$REASON"
           if [ "$REASON" = "cve" ] || [ "$CVES" -gt 0 ] || [ "$COUNT" -ge 10 ]; then
@@ -67,6 +67,14 @@ jobs:
 
       - name: Release
         if: steps.decide.outputs.release == 'true'
+        # Decide outputs derive from merged PR titles (contributor-influenced):
+        # they must ride env vars — data, never re-parsed by the shell — not
+        # ${{ }} splices, which GitHub substitutes textually before bash
+        # parses (script injection with GH_PAT in env; security audit run-1).
+        env:
+          DECIDE_COUNT: ${{ steps.decide.outputs.count }}
+          DECIDE_SINCE: ${{ steps.decide.outputs.since }}
+          DECIDE_TITLES: ${{ steps.decide.outputs.titles }}
         run: |
           git config user.name "release bot"
           git config user.email "actions@users.noreply.github.com"
@@ -74,7 +82,7 @@ jobs:
 
           V="$(grep -oE 'Version = "v[0-9.]+"' internal/version/version.go | grep -oE 'v[0-9.]+')"
           NEW="v${V%.*}.$((${V##*.} + 1))"
-          N="${{ steps.decide.outputs.count }}"
+          N="$DECIDE_COUNT"
           echo "== releasing $V -> $NEW ($N dependency updates)"
 
           sed -i "s/Version = \"$V\"/Version = \"$NEW\"/" internal/version/version.go
@@ -85,7 +93,7 @@ jobs:
           git push origin "$NEW"
 
           NOTES="$(printf 'Dependency rollup: %s update(s) merged since %s (release workflow).\n\n%s\n' \
-            "$N" "${{ steps.decide.outputs.since }}" "${{ steps.decide.outputs.titles }}")"
+            "$N" "$DECIDE_SINCE" "$DECIDE_TITLES")"
           if [ "$REASON" = "cve" ]; then
             NOTES="$NOTES
 
