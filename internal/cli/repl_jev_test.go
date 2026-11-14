@@ -126,6 +126,7 @@ func TestReplJevErrors(t *testing.T) {
 		{"text and bare in-file are exclusive", "jev ask both --in-file " + qFile, "mutually exclusive"},
 		{"ask requires a question", "jev ask", "non-empty"},
 		{"stdin is the repl's own input", "jev ask --in-file -", `not available in the REPL`},
+		{"keyed stdin path is the repl's own input", "jev verify --in-file claim=" + qFile + " --in-file evidence=-", `not available in the REPL`},
 		{"verify rejects free text", "jev verify some free text", "no free text"},
 		{"verify requires claims", "jev verify", "claim"},
 		{"unknown subcommand", "jev ponder", "usage:"},

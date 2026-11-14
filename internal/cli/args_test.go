@@ -79,8 +79,10 @@ func TestParseToolArgs(t *testing.T) {
 }
 
 // TestLoadArgsFile pins the args-file contract: a JSON object from a path or
-// "-" for stdin; anything that is not a JSON object is an error naming the
-// path.
+// "-" for stdin; anything that is not a JSON object — null included, which
+// unmarshals into a nil map without error — is an error naming the path, and
+// the bytes must be valid UTF-8 with the first invalid offset named (no
+// silent U+FFFD into tool arguments).
 func TestLoadArgsFile(t *testing.T) {
 	t.Run("json object file", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "args.json")
@@ -133,6 +135,28 @@ func TestLoadArgsFile(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), path) {
 				t.Errorf("%s file: loadArgsFile = %v, want an error naming %s", name, err, path)
 			}
+		}
+	})
+
+	t.Run("null file is an error naming the path", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "null.json")
+		if err := os.WriteFile(path, []byte(`null`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := loadArgsFile(path)
+		if err == nil || !strings.Contains(err.Error(), "expected a JSON object") || !strings.Contains(err.Error(), path) {
+			t.Fatalf("loadArgsFile(null) = %v, want an error naming the path", err)
+		}
+	})
+
+	t.Run("invalid UTF-8 file is an error naming the offset", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "latin1.json")
+		if err := os.WriteFile(path, []byte("{\"msg\":\"caf\xe9\"}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := loadArgsFile(path)
+		if err == nil || !strings.Contains(err.Error(), "not valid UTF-8") || !strings.Contains(err.Error(), "offset 11") {
+			t.Fatalf("loadArgsFile(latin-1) = %v, want the UTF-8 error naming offset 11", err)
 		}
 	})
 

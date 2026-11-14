@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 )
 
 // parseToolArgs decodes --arg KEY=VALUE pairs into a tool arguments object.
@@ -37,15 +38,24 @@ func decodeArgValue(v string) any {
 
 // loadArgsFile reads a JSON object of tool arguments from the file at path;
 // "-" reads standard input. Anything that is not a JSON object is an error
-// naming the path.
+// naming the path. encoding/json accepts null into a map without error, so
+// the nil check is load-bearing — a null input is a usage error, not an
+// empty argument set. The bytes must be valid UTF-8 with the first invalid
+// offset named: no silent U+FFFD replacement into tool arguments.
 func loadArgsFile(path string) (map[string]any, error) {
 	data, err := readArgsInput(path)
 	if err != nil {
 		return nil, err
 	}
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("args file %s: not valid UTF-8 (first invalid byte at offset %d)", path, utf8InvalidOffset(data))
+	}
 	var args map[string]any
 	if err := json.Unmarshal(data, &args); err != nil {
 		return nil, fmt.Errorf("args file %s: expected a JSON object: %w", path, err)
+	}
+	if args == nil {
+		return nil, fmt.Errorf("args file %s: expected a JSON object", path)
 	}
 	return args, nil
 }

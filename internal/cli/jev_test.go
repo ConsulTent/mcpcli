@@ -426,6 +426,16 @@ func TestJevArgumentErrors(t *testing.T) {
 	}
 }
 
+// TestParseGateInputUTF8 pins the gate loader's UTF-8 guard at the function
+// level: the inline-argv arm rides no shared reader, and Windows argv cannot
+// carry invalid bytes, so a CLI-level cell is not cross-platform here.
+func TestParseGateInputUTF8(t *testing.T) {
+	_, err := parseGateInput(`{"path":"caf` + "\xe9" + `"}`)
+	if err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
+		t.Fatalf("parseGateInput(invalid UTF-8) = %v, want the UTF-8 error naming the offset", err)
+	}
+}
+
 // TestJevVerifyScreenGateE2E pins the three single-op commands against their
 // flavors, including the gate's stdin path for --input.
 func TestJevVerifyScreenGateE2E(t *testing.T) {
@@ -633,6 +643,45 @@ func TestJevCheckProbeE2E(t *testing.T) {
 		assertCountsInvariant(t, doc)
 		if len(calls) != 12 {
 			t.Fatalf("server saw %d calls, want 12 (one per tool)", len(calls))
+		}
+	})
+	t.Run("jkudish partial inventory skips unlisted tools", func(t *testing.T) {
+		var calls []string
+		srv := newTestMCPServerWithTools(t, func(s *mcp.Server) {
+			// Two-tool jkudish signature: the battery must probe the two
+			// listed tools and skip the other ten, not dial them into a
+			// JSON-RPC unknown-tool abort.
+			s.AddTool(&mcp.Tool{Name: "jev_noul", InputSchema: json.RawMessage(`{"type":"object"}`)},
+				func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+					calls = append(calls, "jev_noul")
+					return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"probability": 0.97, "label": "likely"}`}}}, nil
+				})
+			s.AddTool(&mcp.Tool{Name: "jev_verify", InputSchema: json.RawMessage(`{"type":"object"}`)},
+				func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+					calls = append(calls, "jev_verify")
+					return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"results": [{"verdict": "verified"}]}`}}}, nil
+				})
+		})
+		stdout, _, _, err := runRoot(t, "--url", srv.URL, "--json", "jev", "check", "--probe")
+		if err != nil {
+			t.Fatalf("check --probe: %v (a healthy partial inventory must exit 0)", err)
+		}
+		doc := decodeJevCheck(t, stdout)
+		if doc.Summary.OK != 2 || doc.Summary.Errors != 0 || doc.Summary.Skipped != 10 {
+			t.Fatalf("summary = %+v, want two ok, ten skipped, no errors", doc.Summary)
+		}
+		assertCountsInvariant(t, doc)
+		if len(calls) != 2 {
+			t.Fatalf("server saw %d calls, want 2 (unlisted tools must not be dialed)", len(calls))
+		}
+		found := false
+		for _, row := range doc.Probes {
+			if row.Status == "skipped" && strings.Contains(row.Detail, "not listed by this server") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("probes = %+v, want a skip row naming the unlisted reason", doc.Probes)
 		}
 	})
 	t.Run("jev-use two probes", func(t *testing.T) {

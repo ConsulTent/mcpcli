@@ -211,8 +211,9 @@ func replGet(ctx context.Context, fields []string, out io.Writer, s *mcp.ClientS
 
 // splitInFiles pulls every --in-file [KEY=]PATH pair anywhere in the token
 // list: matched pairs are removed from the returned rest, a --in-file with
-// no following token is an error, and "-" is rejected — stdin is the REPL's
-// own input stream. Unknown tokens pass through untouched for the caller.
+// no following token is an error, and any "-" path — the bare token or the
+// PATH side of a KEY=- value — is rejected: stdin is the REPL's own input
+// stream. Unknown tokens pass through untouched for the caller.
 func splitInFiles(fields []string) (rest, specs []string, err error) {
 	rest = make([]string, 0, len(fields))
 	for i := 0; i < len(fields); i++ {
@@ -223,10 +224,11 @@ func splitInFiles(fields []string) (rest, specs []string, err error) {
 		if i+1 >= len(fields) {
 			return nil, nil, errors.New("--in-file requires a value")
 		}
-		if fields[i+1] == "-" {
+		value := fields[i+1]
+		if _, path, found := strings.Cut(value, "="); value == "-" || (found && path == "-") {
 			return nil, nil, errors.New(`--in-file "-" is not available in the REPL: stdin is the REPL's own input`)
 		}
-		specs = append(specs, fields[i+1])
+		specs = append(specs, value)
 		i++
 	}
 	return rest, specs, nil

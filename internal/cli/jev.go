@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
@@ -595,6 +596,10 @@ func droppedFlagWarnings(flavor string, op jev.OpKind, set map[string]bool) []st
 // parseGateInput decodes gate --input: inline JSON, or stdin via "-".
 // encoding/json accepts null into a map without error, so the nil check is
 // load-bearing — a null input is a usage error, not an empty argument set.
+// The bytes must be valid UTF-8 on both paths (readArgsInput does not
+// validate, and the inline path takes raw argv) with the first invalid
+// offset named: no silent U+FFFD replacement into the gate's tool-call
+// input.
 func parseGateInput(input string) (map[string]any, error) {
 	data := []byte(input)
 	if input == "-" {
@@ -603,6 +608,9 @@ func parseGateInput(input string) (map[string]any, error) {
 			return nil, err
 		}
 		data = d
+	}
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("gate --input: not valid UTF-8 (first invalid byte at offset %d)", utf8InvalidOffset(data))
 	}
 	var args map[string]any
 	if err := json.Unmarshal(data, &args); err != nil {
@@ -772,8 +780,12 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 	}
 
 	// The battery: the flavor's fixtures plus one skip row per unmatched
-	// jev_* tool (unknown to the adapter — reachable via tools call).
+	// jev_* tool (unknown to the adapter — reachable via tools call). A
+	// probe whose tool the server does not list is a skip row too (the op
+	// path's membership check): a partial inventory is availability data,
+	// not a failed battery.
 	probes := adapter.Probes()
+	toolNames := slices.Concat(matched, unmatched)
 	for _, name := range unmatched {
 		probes = append(probes, jev.Probe{Tool: name, SkipReason: "not a canonical Jev tool; call it directly via tools call"})
 	}
@@ -787,6 +799,9 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 			summary.Skipped++
 		case p.SkipReason != "":
 			rows = append(rows, probeRowJSON{Tool: p.Tool, Status: probeSkipped, Detail: p.SkipReason})
+			summary.Skipped++
+		case !slices.Contains(toolNames, p.Tool):
+			rows = append(rows, probeRowJSON{Tool: p.Tool, Status: probeSkipped, Detail: "not listed by this server"})
 			summary.Skipped++
 		default:
 			row, abort, authAbort := runJevProbe(ctx, session, f, adapter, p, skipOnAuth)
