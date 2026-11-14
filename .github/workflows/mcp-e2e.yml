@@ -63,7 +63,15 @@ jobs:
         include:
           - os: ubuntu-latest
             container:
-              image: "ghcr.io/homebrew/brew:main"
+              # Digest-pinned (audit run-1, lead mcp-e2e.brew-main-privileged-
+              # floating-image): the tag is a rolling third-party reference that
+              # changed content under this workflow once already (2026-10-30).
+              # Refresh manually — Renovate is deleted from this repo — via:
+              #   t=$(curl -s "https://ghcr.io/token?scope=repository:homebrew/brew:pull" | jq -r .token)
+              #   curl -sI -H "Authorization: Bearer $t" \
+              #     -H "Accept: application/vnd.oci.image.index.v1+json" \
+              #     https://ghcr.io/v2/homebrew/brew/manifests/main | grep -i docker-content-digest
+              image: "ghcr.io/homebrew/brew@sha256:2b209919ea2f80a2820cc6b239180751e382a05f0b2b2ed905f119bc7939ce95"
               options: --privileged
     runs-on: ${{ matrix.os }}
     container: ${{ fromJSON(toJSON(matrix.container)) }}
@@ -168,17 +176,18 @@ jobs:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
     container:
-      image: "ghcr.io/homebrew/brew:main"
+      # Digest-pinned — same rationale and refresh procedure as the e2e job above.
+      image: "ghcr.io/homebrew/brew@sha256:2b209919ea2f80a2820cc6b239180751e382a05f0b2b2ed905f119bc7939ce95"
       options: --privileged
     env:
       GITHUB_PERSONAL_ACCESS_TOKEN: ${{ github.token }}
     steps:
       - name: Install mcp and github-mcp-server
         run: |
-          # 'go' is installed via brew: the moving ghcr.io/homebrew/brew:main
-          # image stopped bundling a Go toolchain (verified 2026-10-30 —
-          # 'go: command not found' on main's dispatch run), and this job
-          # predates that breakage only because older image builds shipped go.
+          # 'go' is installed via brew explicitly: the brew image stopped
+          # bundling a Go toolchain (verified 2026-10-30 — 'go: command not
+          # found' on main's dispatch run), the incident that motivated the
+          # digest pin above; a refreshed digest needs the same re-check.
           brew install jq go ConsulTent/tap/mcpcli
           GOBIN="$(brew --prefix)/bin" go install github.com/github/github-mcp-server/v2/cmd/github-mcp-server@v2.0.3
         env:
