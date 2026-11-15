@@ -861,7 +861,7 @@ func TestJevInteractiveRejection(t *testing.T) {
 // TestJevAskHostileLabelSanitized plants the escape payload in a verdict
 // field (the noul label) and asserts the human-mode verdict line carries no
 // ESC byte — the format layer filters every server-supplied string it
-// renders, while the label's printable residue survives.
+// renders for jev output, while the label's printable residue survives.
 func TestJevAskHostileLabelSanitized(t *testing.T) {
 	srv := newTestMCPServerWithTools(t, func(s *mcp.Server) {
 		// Two core tools, the minimum jkudish signature. The noul label

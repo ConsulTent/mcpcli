@@ -262,17 +262,21 @@ func PromptGet(w io.Writer, res *mcp.GetPromptResult) error {
 // ServerInfo renders an initialize result as labeled lines describing the
 // server, its version, the negotiated protocol version, and capabilities.
 // For JSON output, callers serialize the InitializeResult itself with EmitJSON.
+// Server-controlled labeled values pass through safePrint: a hostile
+// initialize response cannot carry ANSI escapes into the terminal, the
+// operator's own non-ASCII server text renders intact, and values inherit
+// safePrint's 160-rune cap.
 func ServerInfo(w io.Writer, res *mcp.InitializeResult) error {
 	if res == nil {
 		return nil
 	}
 	if res.ServerInfo != nil {
-		fmt.Fprintf(w, "%-14s%s\n", "Server:", res.ServerInfo.Name)
-		fmt.Fprintf(w, "%-14s%s\n", "Version:", res.ServerInfo.Version)
+		fmt.Fprintf(w, "%-14s%s\n", "Server:", safePrint(res.ServerInfo.Name))
+		fmt.Fprintf(w, "%-14s%s\n", "Version:", safePrint(res.ServerInfo.Version))
 	}
-	fmt.Fprintf(w, "%-14s%s\n", "Protocol:", res.ProtocolVersion)
+	fmt.Fprintf(w, "%-14s%s\n", "Protocol:", safePrint(res.ProtocolVersion))
 	if res.Instructions != "" {
-		fmt.Fprintf(w, "%-14s%s\n", "Instructions:", res.Instructions)
+		fmt.Fprintf(w, "%-14s%s\n", "Instructions:", safePrint(res.Instructions))
 	}
 	fmt.Fprintf(w, "%-14s%s\n", "Capabilities:", strings.Join(capabilityNames(res.Capabilities), ", "))
 	// ASCII-only footer (mcp vX.Y.Z - copyright - website): stdout must stay

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -80,9 +81,9 @@ func TestClassifyProbe(t *testing.T) {
 	}
 }
 
-// TestSafeVersion: server-supplied version strings reach output only through
-// safeVersion — control characters and non-[0-9a-zA-Z.-] bytes stripped,
-// length capped at 32.
+// TestSafeVersion: server-supplied version strings reach the report only
+// through safeVersion — control characters and non-[0-9a-zA-Z.-] bytes
+// stripped, length capped at 32.
 func TestSafeVersion(t *testing.T) {
 	got := safeVersion("\x1b]0;pwned\x07 2026-07-28; rm -rf / and a very long tail")
 	const want = "0pwned2026-07-28rm-rfandaverylon"
@@ -94,6 +95,23 @@ func TestSafeVersion(t *testing.T) {
 	}
 	if got := safeVersion("2025-06-18"); got != "2025-06-18" {
 		t.Fatalf("safeVersion(plain) = %q, want unchanged", got)
+	}
+}
+
+// TestWriteCompatReportFiltersControlRunes pins the native line's
+// safeVersion wrap: an ESC-bearing negotiated version cannot reach the
+// report. The scan is ESC-only — writeCompatReport's Rich border is
+// non-ASCII by design, so the plain-contract 0x80 half of
+// TestCompatPlainASCII's scan does not apply to a direct unit call.
+func TestWriteCompatReportFiltersControlRunes(t *testing.T) {
+	res := compatResult{Native: hostileESC + "2025-06-18"}
+	var buf bytes.Buffer
+	if err := writeCompatReport(&buf, res); err != nil {
+		t.Fatalf("writeCompatReport() error = %v", err)
+	}
+	assertNoESC(t, "compat report", buf.String())
+	if !strings.Contains(buf.String(), "2025-06-18") {
+		t.Errorf("native line lost the version residue: %q", buf.String())
 	}
 }
 

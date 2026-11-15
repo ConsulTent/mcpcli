@@ -206,7 +206,7 @@ func probeVersion(ctx context.Context, f *GlobalFlags, v string, supported []str
 // session is accepted without a ping (the SDK's Ping omits the SEP-2575 _meta
 // such servers validate); legacy sessions ping and report honestly when the
 // server downgrades the requested version. safeVersion guards every
-// server-supplied version before it reaches output.
+// server-supplied version before it reaches the report.
 func classifyProbe(pinned, negotiated string, pingErr error) (status, detail string) {
 	if negotiated >= "2026-07-28" {
 		return statusAccepted, "server advertises " + safeVersion(negotiated) + " via discovery; ping skipped (SDK Ping omits the SEP-2575 _meta such servers validate)"
@@ -277,7 +277,7 @@ func writeCompatReport(w io.Writer, res compatResult) error {
 	if err := format.WriteTable(w, t); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "native (negotiated): %s\n", res.Native); err != nil {
+	if _, err := fmt.Fprintf(w, "native (negotiated): %s\n", safeVersion(res.Native)); err != nil {
 		return fmt.Errorf("write native line: %w", err)
 	}
 	return nil

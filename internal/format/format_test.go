@@ -302,6 +302,52 @@ func TestServerInfo(t *testing.T) {
 	}
 }
 
+// TestServerInfoFiltersControlRunes plants the escape payload in every
+// server-controlled labeled write ServerInfo renders — name, version,
+// instructions, and the protocol string (the fixture constructs the result
+// directly, bypassing the SDK's supported-versions gate, so the uniformity
+// wrap is pinned like every other write). A later refactor dropping
+// safePrint from any one write cannot keep this cell green.
+func TestServerInfoFiltersControlRunes(t *testing.T) {
+	res := &mcp.InitializeResult{
+		ProtocolVersion: hostileESC + "2025-06-18",
+		ServerInfo:      &mcp.Implementation{Name: hostileESC + "files-server", Version: hostileESC + "1.2.3"},
+		Instructions:    hostileESC + "Use tools carefully.",
+	}
+	var buf bytes.Buffer
+	if err := ServerInfo(&buf, res); err != nil {
+		t.Fatalf("ServerInfo() error = %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"files-server", "1.2.3", "2025-06-18", "Use tools carefully."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ServerInfo() output missing %q\ngot:\n%s", want, out)
+		}
+	}
+	assertNoESC(t, "serverinfo output", out)
+}
+
+// TestServerInfoPreservesNonASCII pins the IsPrint contract's other half:
+// the operator's own non-ASCII server text renders intact — the blanking
+// defect an ASCII-only filter would introduce at exit 0, with no other
+// test failing.
+func TestServerInfoPreservesNonASCII(t *testing.T) {
+	res := &mcp.InitializeResult{
+		ServerInfo:   &mcp.Implementation{Name: "服务器", Version: "1.2.3-é"},
+		Instructions: "café — use tools",
+	}
+	var buf bytes.Buffer
+	if err := ServerInfo(&buf, res); err != nil {
+		t.Fatalf("ServerInfo() error = %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"服务器", "1.2.3-é", "café — use tools"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ServerInfo() output missing %q\ngot:\n%s", want, out)
+		}
+	}
+}
+
 func TestNilResultsNoPanic(t *testing.T) {
 	var buf bytes.Buffer
 	if err := ToolsList(&buf, nil, false); err != nil {
