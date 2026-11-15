@@ -177,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Digest-pinned — same rationale and refresh procedure as the e2e job above.
-      image: "ghcr.io/homebrew/brew@sha256:2b209919ea2f80a2820cc6b239180751e382a05f0b2b2ed905f119bc7939ce95"
+      image: "ghcr.io/homebrew/brew@sha256:63be5353975c43bce2c885742370ab320b3c57541de72fd1458a26a8e35d7d8e"
       options: --privileged
     env:
       GITHUB_PERSONAL_ACCESS_TOKEN: ${{ github.token }}
