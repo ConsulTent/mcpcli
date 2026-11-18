@@ -213,14 +213,27 @@ func authorizeAt(stderr io.Writer, url string) {
 // pasted code) from stdin. A closed or empty stdin errors out instead of
 // hanging, and so does a context cancellation while waiting for input.
 func newManualFetcher(stderr io.Writer, stdin io.Reader) sdkauth.AuthorizationCodeFetcher {
-	// One reader for the fetcher's lifetime so buffered input is not lost
-	// across invocations.
-	br := bufio.NewReader(stdin)
 	return func(ctx context.Context, args *sdkauth.AuthorizationArgs) (*sdkauth.AuthorizationResult, error) {
 		authorizeAt(stderr, args.URL)
+		// Bare prose on the manual region only: nothing listens at the
+		// placeholder redirect, so the browser's landing page is dead by
+		// design. This must never fold into the shared authorizeAt helper —
+		// the loopback fetcher's redirect is live, and there the sentence
+		// would be false.
+		fmt.Fprint(stderr, "The browser will land on a dead page: nothing listens at the placeholder redirect; copy the code from its address bar.\n")
 		// The prompt is functional output too: it must sit inline on stderr
 		// in every UI mode, or a headless user has nothing to answer.
 		fmt.Fprint(stderr, "Enter authorization code: ")
+
+		// A fresh reader per invocation: *os.File is safe for concurrent
+		// reads, and compat re-authorizes per probe — a probe whose authorize
+		// window expired leaves its read goroutine parked while the next
+		// probe's goroutine reads stdin, so one reader shared across
+		// invocations would race (pinned by
+		// TestManualFetcherSecondInvocationAfterExpiredWindow). Named trade:
+		// a paste landing while a stale reader is still parked may be
+		// consumed by it, costing one re-paste.
+		br := bufio.NewReader(stdin)
 
 		type line struct {
 			text string

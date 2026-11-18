@@ -3,8 +3,10 @@ package auth
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -178,6 +180,11 @@ func TestLoopbackReceiverDeliversCode(t *testing.T) {
 	if !strings.Contains(stderr.String(), "authorize at") {
 		t.Errorf("stderr %q does not announce the authorization URL", stderr.String())
 	}
+	// The dead-redirect note is manual-flow-only: the loopback redirect is
+	// live, so the sentence must never fold into the shared authorizeAt.
+	if strings.Contains(stderr.String(), "dead page") {
+		t.Errorf("loopback stderr %q carries the manual flow's dead-redirect note", stderr.String())
+	}
 
 	closeFn() // must be idempotent when the deferred call runs again
 }
@@ -205,6 +212,9 @@ func TestManualFetcherReadsCode(t *testing.T) {
 	if !strings.Contains(out, "Enter authorization code:") {
 		t.Errorf("stderr %q does not prompt for the code", out)
 	}
+	if !strings.Contains(out, "The browser will land on a dead page: nothing listens at the placeholder redirect; copy the code from its address bar.") {
+		t.Errorf("stderr %q does not explain the dead redirect", out)
+	}
 
 	// A final line without a trailing newline is still a code.
 	fetcher = newManualFetcher(io.Discard, strings.NewReader("abc"))
@@ -231,7 +241,11 @@ func TestAuthorizeAtPrintedInJSONMode(t *testing.T) {
 	if o.err != nil {
 		t.Fatalf("fetcher error: %v", o.err)
 	}
-	for _, want := range []string{"==> authorize at " + authURL + "\n", "Enter authorization code:"} {
+	for _, want := range []string{
+		"==> authorize at " + authURL + "\n",
+		"Enter authorization code:",
+		"The browser will land on a dead page: nothing listens at the placeholder redirect; copy the code from its address bar.",
+	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("JSON-mode manual stderr %q is missing %q", stderr.String(), want)
 		}
@@ -270,6 +284,116 @@ func TestManualFetcherEOF(t *testing.T) {
 		if o.err == nil {
 			t.Errorf("fetcher with stdin %q returned %+v, want an error", input, o.res)
 		}
+	}
+}
+
+// barrierGate is the stdin for the two-invocation barrier test: the first
+// Read is held off the pipe until released and is then handed the release
+// line through the gate itself, so the parked first reader never competes on
+// the pipe and the second invocation's reader is the pipe's sole consumer
+// when line 1 lands. Reader identity is invisible to io.Reader (both
+// invocations share one stdin), so arrival order is the only discriminator —
+// the test waits for Arrived before launching the second invocation.
+type barrierGate struct {
+	pipe    io.Reader
+	arrived chan struct{} // closed when the first Read arrives
+	release chan []byte   // cap-1; the line handed to the parked first Read
+
+	mu        sync.Mutex
+	firstSeen bool
+}
+
+func (g *barrierGate) Read(p []byte) (int, error) {
+	g.mu.Lock()
+	first := !g.firstSeen
+	g.firstSeen = true
+	g.mu.Unlock()
+	if first {
+		close(g.arrived)
+		line := <-g.release
+		return copy(p, line), nil
+	}
+	return g.pipe.Read(p)
+}
+
+// TestManualFetcherSecondInvocationAfterExpiredWindow pins the per-invocation
+// stdin reader. compat re-authorizes per probe, so two invocations of the
+// SAME fetcher overlap: a probe whose authorize window expired (pre-cancelled
+// context) leaves its read goroutine parked while the next probe's goroutine
+// reads. With the pre-fix shared bufio.Reader those overlapping fills race on
+// it — RED under -race. The release is deliberately NOT gated on the second
+// invocation's settlement: a settlement-then-release order would chain every
+// shared-reader access with happens-before edges (arrival → launch, settle →
+// release) and the detector would report nothing, so the test would never go
+// RED on a revert.
+func TestManualFetcherSecondInvocationAfterExpiredWindow(t *testing.T) {
+	pipeR, pipeW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer func() {
+		_ = pipeR.Close()
+		_ = pipeW.Close()
+	}()
+
+	gate := &barrierGate{
+		pipe:    pipeR,
+		arrived: make(chan struct{}),
+		release: make(chan []byte, 1),
+	}
+	var stderr lockedBuffer
+	fetcher := newManualFetcher(&stderr, gate)
+
+	const authURL = "https://idp.example/authorize?state=st9"
+	settled := func(ch chan fetchOutcome, what string) fetchOutcome {
+		select {
+		case o := <-ch:
+			return o
+		case <-time.After(fetchTimeout):
+			t.Fatalf("%s did not settle; the barrier walk hung", what)
+			return fetchOutcome{}
+		}
+	}
+
+	// inv1: an authorize window that already expired (pre-cancelled).
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	cancel1()
+	inv1 := make(chan fetchOutcome, 1)
+	go func() {
+		res, err := fetcher(ctx1, &sdkauth.AuthorizationArgs{URL: authURL})
+		inv1 <- fetchOutcome{res: res, err: err}
+	}()
+	<-gate.arrived // inv1's read goroutine is parked in the gate; only now may inv2 start
+
+	// inv2: the next probe's fresh window.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	inv2 := make(chan fetchOutcome, 1)
+	go func() {
+		res, err := fetcher(ctx2, &sdkauth.AuthorizationArgs{URL: authURL})
+		inv2 <- fetchOutcome{res: res, err: err}
+	}()
+
+	// Line 1 reaches inv2 through the pipe; the parked first read is released
+	// immediately after, without waiting for inv2 to settle — that keeps the
+	// two fills unordered, so the pre-fix shared reader's race is visible.
+	_, _ = pipeW.Write([]byte("code\n"))
+	gate.release <- []byte("cleanup\n")
+
+	o2 := settled(inv2, "second invocation")
+	if o2.err != nil {
+		t.Fatalf("second invocation error: %v", o2.err)
+	}
+	if o2.res.Code != "code" {
+		t.Errorf("second invocation Code = %q, want %q", o2.res.Code, "code")
+	}
+	if o2.res.State != "st9" {
+		t.Errorf("second invocation State = %q, want the URL state echoed (%q)", o2.res.State, "st9")
+	}
+
+	o1 := settled(inv1, "first invocation")
+	if !errors.Is(o1.err, context.Canceled) {
+		t.Errorf("first invocation error = %v, want the expired window's context error", o1.err)
 	}
 }
 

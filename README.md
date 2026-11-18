@@ -138,6 +138,24 @@ block's MIME type (`mcp-logo` + `image/png` → `mcp-logo.png`):
 
 ![mcp tools call get-tiny-image with and without --outfile against the everything MCP server](docs/screenshots/example-everything-image.png)
 
+### Atlassian remote MCP — `https://mcp.atlassian.com/v2/mcp`
+
+Headless: `--auth basic` with a personal API token (`--client-id` is the account
+email, `--client-secret` the token) or `--auth bearer` with a service key.
+
+```sh
+mcp --url https://mcp.atlassian.com/v2/mcp --auth basic \
+  --client-id you@example.com --client-secret "$ATLASSIAN_API_TOKEN" --json tools list
+```
+
+Interactive: `mcp auth login` (the default loopback receiver is preferred; on WSL
+the Windows browser reaches it via localhost forwarding, which works with default
+WSL2 settings — the forwarding default can be disabled in `.wslconfig`). With
+`--auth-flow manual` the browser landing on a dead page is expected — copy the
+code from its address bar — and a pre-registered client must allowlist
+`http://127.0.0.1:1/callback`, or omit `--client-id` for dynamic registration.
+Tokens are resource-bound per URL: after a v1→v2 move, log in again.
+
 ## Commands
 
 Every command accepts the [global flags](#global-flags). Human-readable output goes to
@@ -267,12 +285,15 @@ Select with `--auth`; only streamable-HTTP servers authenticate (stdio servers r
 | `bearer` | Sends `--client-secret` as a static `Authorization: Bearer <token>`; no discovery, no refresh — a rejected token surfaces as the 401 it is. OAuth 2.1 is the MCP spec's formal HTTP authorization; bearer is a pragmatic convenience for servers that accept static tokens, not a spec-defined mode. |
 | `client-credentials` | Two-legged OAuth2 grant. Requires both credentials. The token endpoint is discovered from the server's 401 (WWW-Authenticate resource metadata, then the default protected-resource metadata location, then RFC 8414 metadata on the request origin); the requested scopes are those the authorization server advertises. |
 | `oauth` | The SDK's authorization-code flow (RFC 8414 discovery, PKCE, refresh token requested). mcp never launches a browser: the `loopback` flow (`--auth-flow loopback`, default) prints the authorization URL and waits for your browser to hit a local receiver on `127.0.0.1`; `--auth-flow manual` prints the URL and reads the pasted authorization code from stdin for headless runs. With `--client-id` set, that pre-registered client is used (confidential when `--client-secret` is set too, public otherwise); without it, dynamic client registration. The OAuth wait is bounded by `--timeout`. |
+| `basic` | Sends `Authorization: Basic base64(<user>:<token>)` — `--client-id` is the username (an account email; Atlassian personal API tokens) and `--client-secret` the token. Like bearer: no discovery, no refresh — a rejected credential surfaces as the 401 it is. The header is scoped to the MCP target host, so authorization-server metadata requests never carry it. |
 
 ### Credentials
 
 `--client-id` / `--client-secret` flags or the `MCPCLI_CLIENT_ID` / `MCPCLI_CLIENT_SECRET`
 environment variables; a non-empty flag wins over its variable, and each resolves
-independently. For `bearer`, the secret carries the static bearer token.
+independently. For `bearer`, the secret carries the static bearer token. For
+`basic`, `--client-id` is the username (e.g. the Atlassian account email) and
+`--client-secret` the token.
 
 A secret passed on the command line is visible in shell history and in process listings,
 so any run that sets `--client-secret` prints a one-line warning to stderr — functional
@@ -713,11 +734,11 @@ only `exit`, `quit`, or end of input leaves it.
 |---|---|---|
 | `--command` | | stdio server to launch, e.g. `"npx -y @modelcontextprotocol/server-filesystem /tmp"` |
 | `--url` | | streamable HTTP endpoint of the MCP server |
-| `--auth` | `none` | `none`, `bearer`, `client-credentials`, `oauth` |
+| `--auth` | `none` | `none`, `bearer`, `client-credentials`, `oauth`, `basic` |
 | `--auth-flow` | `loopback` | OAuth flow: `loopback` or `manual` |
 | `--protocol` | `auto` | `auto`, `draft`, or a protocol date such as `2025-06-18` |
-| `--client-id` | | OAuth client ID (env `MCPCLI_CLIENT_ID`) |
-| `--client-secret` | | OAuth client secret (env `MCPCLI_CLIENT_SECRET`); also the bearer token |
+| `--client-id` | | OAuth client ID or Basic username/email (env `MCPCLI_CLIENT_ID`) |
+| `--client-secret` | | OAuth client secret (env `MCPCLI_CLIENT_SECRET`); also the bearer token or the Basic token |
 | `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference) |
 | `--timeout` | `30s` | timeout for network operations |
 | `--json` | `false` | machine-readable JSON output |

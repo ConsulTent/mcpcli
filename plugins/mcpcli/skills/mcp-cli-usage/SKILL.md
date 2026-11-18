@@ -40,11 +40,11 @@ scripts and CI.
 |---|---|---|
 | `--command` | | stdio server to launch, e.g. `"npx -y @modelcontextprotocol/server-filesystem /tmp"` |
 | `--url` | | streamable HTTP endpoint of the MCP server |
-| `--auth` | `none` | `none`, `bearer`, `client-credentials`, `oauth` (HTTP only; stdio rejects it) |
+| `--auth` | `none` | `none`, `bearer`, `client-credentials`, `oauth`, `basic` (HTTP only; stdio rejects it) |
 | `--auth-flow` | `loopback` | OAuth flow: `loopback` or `manual`; only used with `--auth oauth`; `manual` reads a pasted code from stdin (headless-safe) |
-| `--protocol` | `auto` | `auto`, `draft`, or a date such as `2025-06-18` |
-| `--client-id` | | OAuth client ID (env `MCPCLI_CLIENT_ID`) |
-| `--client-secret` | | OAuth client secret / bearer token (env `MCPCLI_CLIENT_SECRET`); flags win over env |
+| `--protocol` | `auto` | `auto`, `draft`, or a protocol date such as `2025-06-18` |
+| `--client-id` | | OAuth client ID or Basic username/email (env `MCPCLI_CLIENT_ID`) |
+| `--client-secret` | | OAuth client secret / bearer token / Basic token (env `MCPCLI_CLIENT_SECRET`); flags win over env |
 | `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference); expanded and injected only when the run spawns a stdio child |
 | `--timeout` | `30s` | timeout for network operations |
 | `--json` | `false` | one JSON document on stdout, no decoration |
