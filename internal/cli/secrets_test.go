@@ -14,10 +14,10 @@ import (
 )
 
 // The expansion-path tests: the expandSecretRefs helper's unit behavior and
-// its three consumers (runWithConnection via the bearer flow in run_test.go,
-// runJevCheck's own session open, and auth login). Every credential-shaped
-// value is an obviously-synthetic dummy riding the house fakes from
-// bws_test.go.
+// its four consumers (runWithConnection via the bearer flow in run_test.go,
+// runJevCheck's own session open, auth login, and compat's RunE). Every
+// credential-shaped value is an obviously-synthetic dummy riding the house
+// fakes from bws_test.go.
 
 // bwsTestSeed resolves the standard one-secret fixture into the cache: uuid
 // ref "11111111-..." → decrypted name "first", value "value-a".
