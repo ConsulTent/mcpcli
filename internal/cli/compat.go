@@ -5,15 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
+	"github.com/ConsulTent/mcpcli/internal/auth"
 	"github.com/ConsulTent/mcpcli/internal/connection"
 	"github.com/ConsulTent/mcpcli/internal/format"
 	"github.com/ConsulTent/mcpcli/internal/trace"
 	"github.com/ConsulTent/mcpcli/internal/ui"
+	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
@@ -43,28 +46,31 @@ type compatResult struct {
 
 // newCompatCommand builds "compat": probe every protocol version mcp can
 // name against the target server, then report the native (negotiated)
-// version. Unlike the other session commands it does its own pinned connects
-// and ignores auth entirely.
+// version. Like the session commands it honors the standard --auth flags
+// (unauthenticated only under --auth none).
 func newCompatCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "compat",
 		Short: "Probe which MCP protocol versions the server accepts",
 		Long: `Compat probes each MCP protocol version mcp can name (plus "draft") by
 opening a minimal connection pinned to that version; rejections are reported
-as data, not failures. Notes: auth is ignored, probes are unauthenticated; a
-discovery-negotiated version is accepted on advertisement (its ping is
-skipped: the SDK Ping omits the _meta such servers validate); legacy sessions
-report the negotiated version when the server downgrades. The final line is
-the native version from an unpinned connect: what the current transport
-negotiated, which may be older than the server's newest supported version.`,
+as data, not failures. Notes: probes authenticate with the standard --auth
+flags (unauthenticated only under --auth none); a discovery-negotiated
+version is accepted on advertisement (its ping is skipped: the SDK Ping
+omits the _meta such servers validate); legacy sessions report the
+negotiated version when the server downgrades. The final line is the native
+version from an unpinned connect: what the current transport negotiated,
+which may be older than the server's newest supported version. --protocol
+does not apply: compat probes every version mcp can name by design.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			f := FlagsFrom(cmd)
 			if f == nil {
 				return errors.New("global flags unavailable: command must be built by NewRootCommand")
 			}
-			// Exactly one target, with connection's own messages. Auth is
-			// ignored, so no provider is built and no handler is set.
+			// Exactly one target, with connection's own messages. The auth
+			// handler is built below and threaded through every probe; stdio
+			// still rejects it inside Open.
 			if err := (&connection.Options{Command: f.Command, URL: f.URL}).Validate(); err != nil {
 				return err
 			}
@@ -73,15 +79,46 @@ negotiated, which may be older than the server's newest supported version.`,
 				target = f.Command
 			}
 
+			// The auth build gets one --timeout window, like runJevCheck's
+			// connect phase: secret-reference expansion may perform live
+			// identity-server exchanges, and the OAuth wait inside Build can
+			// too. The probes keep their per-probe windows below.
+			buildCtx, cancel := context.WithTimeout(cmd.Context(), f.Timeout)
+			defer cancel()
+			// Secret references resolve before anything probes: the expanded
+			// client secret feeds auth.Params below, and the env map (stdio
+			// runs only) rides every probe's Options construction.
+			env, err := expandSecretRefs(buildCtx, f, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			provider, err := auth.ProviderFor(f.Auth)
+			if err != nil {
+				return err
+			}
+			handler, cleanup, err := provider.Build(buildCtx, auth.Params{
+				Target: target,
+				Creds:  auth.ResolveCredentials(f.ClientID, f.ClientSecret),
+				Stderr: os.Stderr,
+				Stdin:  os.Stdin,
+				Flow:   f.AuthFlow,
+			})
+			if err != nil {
+				return err
+			}
+			if cleanup != nil {
+				defer cleanup()
+			}
+
 			var tracer *trace.Tracer
 			if f.Trace || f.Verbose {
 				tracer = trace.New(f.Verbose)
 			}
 
 			res := compatResult{NativeNote: "negotiated on this transport", Results: []compatRow{}}
-			err := ui.RunWithSpinner(cmd.Context(), "probing protocol versions on "+target, func(ctx context.Context) error {
-				res.Results = probeVersions(ctx, f, mcp.SupportedProtocolVersions(), tracer)
-				native, err := fetchNative(ctx, f, tracer)
+			err = ui.RunWithSpinner(cmd.Context(), "probing protocol versions on "+target, func(ctx context.Context) error {
+				res.Results = probeVersions(ctx, f, mcp.SupportedProtocolVersions(), tracer, handler, env)
+				native, err := fetchNative(ctx, f, tracer, handler, env)
 				if err != nil {
 					return err
 				}
@@ -113,12 +150,13 @@ negotiated, which may be older than the server's newest supported version.`,
 // minimal pinned connect plus a ping per version, one report row each, in
 // probe order. supported is the linked SDK's version list (parameterized so
 // tests can drive the not-speakeable branch): a version outside it is
-// reported without any connection attempt.
-func probeVersions(ctx context.Context, f *GlobalFlags, supported []string, tracer *trace.Tracer) []compatRow {
+// reported without any connection attempt. handler and env ride every
+// probe's connection (both may be nil under --auth none).
+func probeVersions(ctx context.Context, f *GlobalFlags, supported []string, tracer *trace.Tracer, handler sdkauth.OAuthHandler, env map[string]string) []compatRow {
 	versions := slices.Concat(connection.KnownVersions[:], []string{connection.DraftAlias})
 	rows := make([]compatRow, 0, len(versions))
 	for _, v := range versions {
-		rows = append(rows, probeVersion(ctx, f, v, supported, tracer))
+		rows = append(rows, probeVersion(ctx, f, v, supported, tracer, handler, env))
 	}
 	return rows
 }
@@ -131,7 +169,7 @@ func probeVersions(ctx context.Context, f *GlobalFlags, supported []string, trac
 // Anything else — connect failure, ping failure, or a version the linked SDK
 // cannot speak — is data about the endpoint, so only it is recorded, never
 // returned as an error.
-func probeVersion(ctx context.Context, f *GlobalFlags, v string, supported []string, tracer *trace.Tracer) compatRow {
+func probeVersion(ctx context.Context, f *GlobalFlags, v string, supported []string, tracer *trace.Tracer, handler sdkauth.OAuthHandler, env map[string]string) compatRow {
 	row := compatRow{Version: v}
 	resolved, err := connection.ResolveVersion(v)
 	if err != nil {
@@ -160,7 +198,10 @@ func probeVersion(ctx context.Context, f *GlobalFlags, v string, supported []str
 	session, err := connection.Open(pctx, &connection.Options{
 		Command:         f.Command,
 		URL:             f.URL,
+		Auth:            f.Auth,
 		ProtocolVersion: v, // Open resolves the alias itself
+		AuthHandler:     handler,
+		Env:             env,
 		Tracer:          tracer,
 		Label:           "probe " + v,
 	})
@@ -242,13 +283,16 @@ func safeVersion(s string) string {
 // fetchNative performs the unpinned (auto) connect and returns the protocol
 // version the server reported for it. An error here means the endpoint is
 // unreachable: the probe could not be completed.
-func fetchNative(ctx context.Context, f *GlobalFlags, tracer *trace.Tracer) (string, error) {
+func fetchNative(ctx context.Context, f *GlobalFlags, tracer *trace.Tracer, handler sdkauth.OAuthHandler, env map[string]string) (string, error) {
 	nctx, cancel := context.WithTimeout(ctx, f.Timeout)
 	defer cancel()
 	session, err := connection.Open(nctx, &connection.Options{
 		Command:         f.Command,
 		URL:             f.URL,
+		Auth:            f.Auth,
 		ProtocolVersion: "auto", // explicitly unpinned; Open resolves the alias
+		AuthHandler:     handler,
+		Env:             env,
 		Tracer:          tracer,
 		Label:           "native",
 	})

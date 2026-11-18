@@ -363,7 +363,8 @@ const (
 // read-only call per available tool. Auth errors from a dead provider key
 // fail the run by default; --probe-on-auth-error skip aborts the battery,
 // marks the rest skipped, and exits 0 (the CI posture: an unpaid bill is not
-// a red build). Unlike compat, check honors --auth for its connection.
+// a red build). Like compat, check honors the standard --auth flags for its
+// connection.
 func newJevCheckCommand() *cobra.Command {
 	var (
 		probe  bool
@@ -704,9 +705,9 @@ func sanitizeNote(note string) string {
 }
 
 // runJevCheck performs the whole check: open one session (honoring --auth,
-// unlike compat), detect the flavor, build the report, and with probe run
-// the battery. Each probe owns its own --timeout window carved from ctx; the
-// connect/list phase shares one window.
+// as compat's probes do), detect the flavor, build the report, and with
+// probe run the battery. Each probe owns its own --timeout window carved
+// from ctx; the connect/list phase shares one window.
 func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cmd *cobra.Command) (checkResult, error) {
 	res := checkResult{Ops: []opRowJSON{}}
 

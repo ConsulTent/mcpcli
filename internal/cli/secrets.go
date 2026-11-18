@@ -20,9 +20,9 @@ func newSecretResolver() (*secret.Resolver, error) {
 
 // expandSecretRefs resolves every secret reference the run consumes BEFORE
 // any connection opens, so auth stays secret-free (it never sees a bws://
-// ref) and stdio children receive resolved values. One helper, three
-// consumers: runWithConnection, runJevCheck's own session open, and
-// newAuthLoginCommand.
+// ref) and stdio children receive resolved values. One helper, four
+// consumers: runWithConnection, runJevCheck's own session open, compat's
+// RunE, and newAuthLoginCommand.
 //
 // It expands a reference in the resolved --client-secret (the HTTP bearer
 // consumes it, so this happens on every run) and — only when the run spawns

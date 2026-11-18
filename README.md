@@ -252,7 +252,9 @@ server, reporting each version as accepted / rejected / not-speakeable, then end
   because the SDK's SEP-2575 discovery filtering holds newer versions back — the pinned
   `2026-07-28` row may honestly report "server echoed 2025-11-25" against a spec-compliant
   server.
-- `compat` ignores `--auth`: probes always run unauthenticated.
+- `compat` authenticates with the standard `--auth` flags; unauthenticated only under
+  `--auth none`.
+- `--protocol` does not apply to compat: it probes every version mcp can name by design.
 
 ## Authentication
 
@@ -782,9 +784,10 @@ when the provider rejects its key — the skipped battery is reported as data (s
   (`alive via tools/list`, `"via"` in JSON). A server declaring neither ping
   nor any listable capability fails with a matching error; `auth login`
   verifies by the connect itself in that case.
-- `compat` runs unauthenticated and, over stateful streamable HTTP, its negotiated
-  ("native") version may lag the server's newest supported version due to the SDK's
-  SEP-2575 discovery filtering (see [Protocol versions](#protocol-versions)).
+- `compat` authenticates with the standard `--auth` flags; unauthenticated only under
+  `--auth none`. Over stateful streamable HTTP, its negotiated ("native") version may lag
+  the server's newest supported version due to the SDK's SEP-2575 discovery filtering
+  (see [Protocol versions](#protocol-versions)).
 - No browser is ever launched: the loopback OAuth flow prints the URL for you to open in
   your own browser; use `--auth-flow manual` where no browser is available.
 - Jev in the REPL covers the text-bearing forms only (`jev ask/screen/verify`
@@ -811,8 +814,8 @@ when the provider rejects its key — the skipped battery is reported as data (s
   - `--plain` governs mcp's decoration, never secret bytes — a secret VALUE
     is printed exactly as decrypted;
   - `--env` is validated on every command but expanded and injected only
-    for stdio children — never on the `bws` verbs, `compat`, `auth login`,
-    or HTTP runs / the `--url` REPL;
+    for stdio children — never on the `bws` verbs, `auth login`, or HTTP
+    runs / the `--url` REPL;
   - an organization with more secrets than one list page fails loud on the
     response's `continuationToken` (pagination is unsupported);
   - two secrets whose decrypted names collide emit duplicate `KEY=value`

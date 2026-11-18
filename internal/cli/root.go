@@ -220,8 +220,8 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 
 	// Subcommands. The auth group manages cached OAuth credentials instead
 	// of opening a server session, so it imposes no connection flags.
-	// compat opens its own pinned sessions and ignores auth; jev check opens
-	// its own session but honors auth.
+	// compat probes authenticate with the standard --auth flags; jev check
+	// opens its own auth-honoring session.
 	cmd.AddCommand(newAuthCommand(g), newBWSCommand(g), newInfoCommand(), newPingCommand(), newCompatCommand(), newToolsCommand(), newResourcesCommand(), newPromptsCommand(), newJevCommand())
 
 	return cmd

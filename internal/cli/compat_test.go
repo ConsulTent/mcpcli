@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ConsulTent/mcpcli/internal/auth"
 	"github.com/ConsulTent/mcpcli/internal/connection"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -261,6 +264,101 @@ func TestCompatDraftResolves(t *testing.T) {
 	}
 }
 
+// newAuthRequiredMCPServer hosts the streamable MCP handler behind a gate
+// that rejects every request lacking the expected Authorization header (the
+// authed-fake precedent: TestBearerRefFlowE2E's header-reading wrapper), so
+// only runs carrying the matching credential complete the handshake.
+func newAuthRequiredMCPServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := mcp.NewServer(&mcp.Implementation{Name: "testserver", Version: "1.0.0"}, nil)
+	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer ok" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		streamable.ServeHTTP(w, r)
+	}))
+	t.Cleanup(httpSrv.Close)
+	return httpSrv
+}
+
+// TestCompatE2EAuthenticated pins compat's auth honoring end to end: an
+// OAuth-style server that rejects every unauthenticated request still yields
+// accepted probe rows and a native version when the run carries --auth
+// bearer with the matching token.
+func TestCompatE2EAuthenticated(t *testing.T) {
+	authed := newAuthRequiredMCPServer(t)
+
+	stdout, stderr, _, err := runRoot(t, "--url", authed.URL, "--auth", "bearer",
+		"--client-secret", "ok", "--json", "compat")
+	if err != nil {
+		t.Fatalf("authed compat: %v\nstderr: %s", err, stderr)
+	}
+	got := parseCompatJSON(t, stdout)
+	accepted := 0
+	for _, row := range got.Results {
+		if row.Status == "accepted" {
+			accepted++
+		}
+	}
+	if accepted < 1 {
+		t.Errorf("authed compat reports %d accepted rows, want at least 1: %+v", accepted, got.Results)
+	}
+	if got.Native == "" {
+		t.Errorf("authed compat native is empty in %q", stdout)
+	}
+}
+
+// TestCompatAuthNoneHintsOn401: under --auth none no handler is built, so the
+// auth-required server 401s the native connect and compat fails before any
+// report — with the connection.Open retry hint naming the modes that would
+// authenticate.
+func TestCompatAuthNoneHintsOn401(t *testing.T) {
+	authed := newAuthRequiredMCPServer(t)
+
+	_, _, _, err := runRoot(t, "--url", authed.URL, "--auth", "none", "compat")
+	if err == nil {
+		t.Fatal("compat with --auth none against an auth-required server succeeded, want an error (exit 1)")
+	}
+	if !strings.Contains(err.Error(), "server requires authorization") {
+		t.Errorf("error %q does not carry the auth retry hint", err.Error())
+	}
+}
+
+// TestCompatProbeVersionsAuthenticated drives probeVersions directly at the
+// row level: with a bearer handler built from the provider, every probe
+// completes the authed handshake against a server that rejects
+// unauthenticated requests, so every row is accepted.
+func TestCompatProbeVersionsAuthenticated(t *testing.T) {
+	authed := newAuthRequiredMCPServer(t)
+	provider, err := auth.ProviderFor("bearer")
+	if err != nil {
+		t.Fatalf("ProviderFor(bearer): %v", err)
+	}
+	handler, cleanup, err := provider.Build(context.Background(), auth.Params{
+		Target: authed.URL,
+		Creds:  auth.Credentials{ClientSecret: "ok"},
+	})
+	if err != nil {
+		t.Fatalf("bearer Build: %v", err)
+	}
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	f := &GlobalFlags{URL: authed.URL, Auth: "bearer", Timeout: 5 * time.Second}
+
+	rows := probeVersions(context.Background(), f, mcp.SupportedProtocolVersions(), nil, handler, nil)
+	if want := len(connection.KnownVersions) + 1; len(rows) != want {
+		t.Fatalf("probeVersions returned %d rows, want %d", len(rows), want)
+	}
+	for _, row := range rows {
+		if row.Status != "accepted" {
+			t.Errorf("version %q status = %q, want accepted (detail %q)", row.Version, row.Status, row.Detail)
+		}
+	}
+}
+
 // TestCompatNotSpeakable table-drives the branch that fires when the linked
 // SDK cannot speak a version it can name: those rows are reported without any
 // connection attempt. The target binary does not exist, so every speakable
@@ -280,7 +378,7 @@ func TestCompatNotSpeakable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows := probeVersions(context.Background(), f, tt.supported, nil)
+			rows := probeVersions(context.Background(), f, tt.supported, nil, nil, nil)
 			if want := len(connection.KnownVersions) + 1; len(rows) != want {
 				t.Fatalf("probeVersions returned %d rows, want %d", len(rows), want)
 			}
