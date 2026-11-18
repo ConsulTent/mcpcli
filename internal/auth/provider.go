@@ -1,5 +1,5 @@
 // Package auth provides the mcp auth provider registry and the built-in
-// providers: none, bearer, client-credentials, and oauth.
+// providers: none, bearer, client-credentials, oauth, and basic.
 //
 // A provider turns flag/environment input into an SDK OAuthHandler. The
 // streamable HTTP transport calls the handler's TokenSource to set the
@@ -102,15 +102,16 @@ func namesLocked() []string {
 }
 
 // RegisterBuiltins registers the built-in providers: none, bearer,
-// client-credentials and oauth. It is invoked from the cli package's init
-// (root.go) so the registry is populated before any flag validation runs; it
-// is safe to call repeatedly.
+// client-credentials, oauth, and basic. It is invoked from the cli package's
+// init (root.go) so the registry is populated before any flag validation runs;
+// it is safe to call repeatedly.
 func RegisterBuiltins() {
 	builtinsOnce.Do(func() {
 		Register(noneProvider{})
 		Register(bearerProvider{})
 		Register(clientCredentialsProvider{})
 		Register(oauthProvider{})
+		Register(basicProvider{})
 	})
 }
 

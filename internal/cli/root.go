@@ -181,7 +181,7 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 				_, _ = fmt.Fprintln(os.Stderr, "warning: --client-secret was passed on the command line; prefer bws:// references or MCPCLI_CLIENT_SECRET")
 			}
 			// Functional security note, not mode-gated decoration: a credential
-			// (bearer secret, client-credentials, oauth token, or the
+			// (bearer or basic secrets, client-credentials, oauth token, or the
 			// auth-login exchange) sent to a plain-http URL travels
 			// unencrypted — the same no-blocklist ruling as the BWS instance
 			// warning. The scheme check lowercases because url.Parse does
@@ -202,11 +202,11 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 	pf := cmd.PersistentFlags()
 	pf.StringVar(&g.Command, "command", "", `stdio server to launch, e.g. "npx -y @modelcontextprotocol/server-filesystem /tmp"`)
 	pf.StringVar(&g.URL, "url", "", "streamable HTTP endpoint of the MCP server")
-	pf.StringVar(&g.Auth, "auth", "none", "auth mode: none, bearer, client-credentials, oauth")
+	pf.StringVar(&g.Auth, "auth", "none", "auth mode: none, bearer, client-credentials, oauth, basic")
 	pf.StringVar(&g.AuthFlow, "auth-flow", "loopback", "OAuth flow: loopback or manual (only used with --auth oauth)")
 	pf.StringVar(&g.Protocol, "protocol", "auto", `MCP protocol version: auto, draft, or a date such as "2025-06-18"`)
-	pf.StringVar(&g.ClientID, "client-id", "", "OAuth client ID (env MCPCLI_CLIENT_ID)")
-	pf.StringVar(&g.ClientSecret, "client-secret", "", "OAuth client secret (env MCPCLI_CLIENT_SECRET)")
+	pf.StringVar(&g.ClientID, "client-id", "", "client ID (OAuth) or Basic username/email (env MCPCLI_CLIENT_ID)")
+	pf.StringVar(&g.ClientSecret, "client-secret", "", "client secret (OAuth, bearer token, or Basic token) (env MCPCLI_CLIENT_SECRET)")
 	// StringArrayVar, not StringSliceVar: the slice type CSV-splits values
 	// and would corrupt a comma-bearing literal (the house repeatable-flag
 	// precedent).

@@ -47,7 +47,7 @@ func TestOpenHintsAuthOn401(t *testing.T) {
 	if !strings.Contains(strings.ToLower(msg), "unauthorized") {
 		t.Errorf("error %q does not mention the unauthorized response", msg)
 	}
-	if !strings.Contains(msg, "retry with --auth bearer or --auth oauth") {
+	if !strings.Contains(msg, "retry with --auth bearer, --auth oauth, or --auth basic") {
 		t.Errorf("error %q does not carry the auth retry hint", msg)
 	}
 }

@@ -3,6 +3,7 @@ package connection
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,7 +23,7 @@ type Options struct {
 	Command string // shell-like argv string to launch over stdio
 	URL     string // streamable HTTP endpoint of the MCP server
 
-	Auth            string // auth mode: none, bearer, client-credentials, oauth
+	Auth            string // auth mode: none, bearer, client-credentials, oauth, basic
 	ProtocolVersion string // auto, draft, or a date; see ResolveVersion
 
 	// AuthHandler authorizes streamable HTTP requests. The cli layer builds
@@ -104,7 +105,7 @@ func Open(ctx context.Context, o *Options) (*mcp.ClientSession, error) {
 	// The hint only fires for --auth none: a run that already asked for auth
 	// must not be told to add more.
 	if o.Auth == "none" && isUnauthorizedConnect(err) {
-		return nil, fmt.Errorf("%w; server requires authorization; retry with --auth bearer or --auth oauth", err)
+		return nil, fmt.Errorf("%w; server requires authorization; retry with --auth bearer, --auth oauth, or --auth basic", err)
 	}
 	return nil, err
 }
@@ -234,8 +235,16 @@ func transportFor(o *Options) (mcp.Transport, *stdioCapture, error) {
 		cmd.Stderr = capture.stderr
 		return &mcp.CommandTransport{Command: cmd}, capture, nil
 	}
-	return &mcp.StreamableClientTransport{
+	transport := &mcp.StreamableClientTransport{
 		Endpoint:     o.URL,
 		OAuthHandler: o.AuthHandler,
-	}, nil, nil
+	}
+	// A handler may carry its own HTTP client (basic auth's credential
+	// injection round tripper). Assert it here rather than growing the SDK's
+	// OAuthHandler interface: only the streamable transport can use it, and a
+	// nil AuthHandler simply fails the assertion.
+	if bc, ok := o.AuthHandler.(interface{ TransportHTTPClient() *http.Client }); ok {
+		transport.HTTPClient = bc.TransportHTTPClient()
+	}
+	return transport, nil, nil
 }
