@@ -108,6 +108,9 @@ func TestClientCredAuthorizeFlow(t *testing.T) {
 		if gotScope := r.FormValue("scope"); gotScope != "mcp:read mcp:write" {
 			t.Errorf("scope = %q, want %q (scopes advertised in AS metadata)", gotScope, "mcp:read mcp:write")
 		}
+		if gotResource := r.FormValue("resource"); gotResource != srvURL+"/mcp" {
+			t.Errorf("resource = %q, want %q (resource advertised in PRM)", gotResource, srvURL+"/mcp")
+		}
 		tokenHits.Add(1)
 		writeJSON(w, map[string]any{"access_token": access, "token_type": "Bearer"})
 	})
@@ -178,6 +181,221 @@ func TestClientCredAuthorizeFlow(t *testing.T) {
 	}
 	if tok.AccessToken != access {
 		t.Errorf("access token = %q, want %q", tok.AccessToken, access)
+	}
+	if n := tokenHits.Load(); n != 1 {
+		t.Errorf("token endpoint hit %d times, want 1", n)
+	}
+}
+
+// driveClientCredAuthorize drives the resource-indicator cells through the
+// full flow: it serves newMux on an httptest server, builds the
+// client-credentials handler, performs the 401 request against /mcp like the
+// SDK transport would, runs Authorize, and returns the access token the /token
+// endpoint issued. The mux builder receives the server URL because the
+// discovery documents carry absolute URLs.
+func driveClientCredAuthorize(t *testing.T, newMux func(srvURL string) *http.ServeMux) string {
+	t.Helper()
+
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+	// The discovery documents carry absolute URLs, so the cell's handlers
+	// need the server URL; swap the placeholder mux in once it is known.
+	srv.Config.Handler = newMux(srv.URL)
+
+	t.Setenv("MCPCLI_CLIENT_ID", "test-client-id")
+	t.Setenv("MCPCLI_CLIENT_SECRET", "dummy-secret")
+
+	p, err := ProviderFor("client-credentials")
+	if err != nil {
+		t.Fatalf("ProviderFor(client-credentials): %v", err)
+	}
+	h, cleanup, err := p.Build(context.Background(), Params{
+		Target: srv.URL + "/mcp",
+		Creds:  ResolveCredentials("", ""),
+	})
+	if err != nil {
+		t.Fatalf("client-credentials Build: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	ctx := context.Background()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/mcp", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request to fake MCP server: %v", err)
+	}
+	// Authorize performs discovery + the client-credentials grant; per the
+	// SDK contract it owns (and closes) the response body.
+	if err := h.Authorize(ctx, req, resp); err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+
+	ts, err := h.TokenSource(ctx)
+	if err != nil {
+		t.Fatalf("TokenSource after Authorize: %v", err)
+	}
+	if ts == nil {
+		t.Fatal("TokenSource after successful Authorize is nil; SDK would retry headerless")
+	}
+	tok, err := ts.Token()
+	if err != nil {
+		t.Fatalf("ts.Token(): %v", err)
+	}
+	return tok.AccessToken
+}
+
+// TestClientCredAuthorizeFlowIssuerFormResource pins the challenge-site
+// tolerance: a PRM whose resource is the issuer form (srvURL, NOT the connect
+// URL srvURL+"/mcp") must not abort discovery, and the advertised value — not
+// the connect URL — rides the token request as the RFC 8707 resource
+// indicator.
+func TestClientCredAuthorizeFlowIssuerFormResource(t *testing.T) {
+	const access = "issuer-form-access-token"
+	var tokenHits atomic.Int32
+
+	got := driveClientCredAuthorize(t, func(srvURL string) *http.ServeMux {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("WWW-Authenticate",
+				`Bearer resource_metadata="`+srvURL+`/.well-known/oauth-protected-resource"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+		mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"resource":              srvURL, // issuer form, NOT srvURL+"/mcp"
+				"authorization_servers": []string{srvURL},
+			})
+		})
+		mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                           srvURL,
+				"authorization_endpoint":           srvURL + "/authorize",
+				"token_endpoint":                   srvURL + "/token",
+				"jwks_uri":                         srvURL + "/jwks",
+				"code_challenge_methods_supported": []string{"S256"},
+			})
+		})
+		mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+			if resource := r.FormValue("resource"); resource != srvURL {
+				t.Errorf("resource = %q, want %q (the advertised issuer form)", resource, srvURL)
+			}
+			tokenHits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": access, "token_type": "Bearer"})
+		})
+		return mux
+	})
+
+	if got != access {
+		t.Errorf("access token = %q, want %q", got, access)
+	}
+	if n := tokenHits.Load(); n != 1 {
+		t.Errorf("token endpoint hit %d times, want 1", n)
+	}
+}
+
+// TestClientCredDefaultPathPRMResource pins the default-path site: a bare 401
+// (no WWW-Authenticate challenge) whose RFC 9728 metadata at the default
+// location advertises an issuer-form resource must send that advertised value
+// as the resource indicator, not fall back to the origin with no indicator.
+func TestClientCredDefaultPathPRMResource(t *testing.T) {
+	const access = "default-path-access-token"
+	var tokenHits atomic.Int32
+
+	got := driveClientCredAuthorize(t, func(srvURL string) *http.ServeMux {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+			// Bare 401: no WWW-Authenticate challenge at all.
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+		mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"resource":              srvURL, // issuer form, NOT srvURL+"/mcp"
+				"authorization_servers": []string{srvURL},
+			})
+		})
+		mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                           srvURL,
+				"authorization_endpoint":           srvURL + "/authorize",
+				"token_endpoint":                   srvURL + "/token",
+				"jwks_uri":                         srvURL + "/jwks",
+				"code_challenge_methods_supported": []string{"S256"},
+			})
+		})
+		mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+			if resource := r.FormValue("resource"); resource != srvURL {
+				t.Errorf("resource = %q, want %q (the advertised issuer form)", resource, srvURL)
+			}
+			tokenHits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": access, "token_type": "Bearer"})
+		})
+		return mux
+	})
+
+	if got != access {
+		t.Errorf("access token = %q, want %q", got, access)
+	}
+	if n := tokenHits.Load(); n != 1 {
+		t.Errorf("token endpoint hit %d times, want 1", n)
+	}
+}
+
+// TestClientCredMissingPRMResourceFallsBackToTarget pins the fallback: a
+// challenge PRM that omits the resource key entirely must not abort
+// discovery, and the token request carries the connect URL (the handler's
+// target) as the resource indicator.
+func TestClientCredMissingPRMResourceFallsBackToTarget(t *testing.T) {
+	const access = "fallback-access-token"
+	var tokenHits atomic.Int32
+
+	got := driveClientCredAuthorize(t, func(srvURL string) *http.ServeMux {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("WWW-Authenticate",
+				`Bearer resource_metadata="`+srvURL+`/.well-known/oauth-protected-resource"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+		mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				// No "resource" key at all.
+				"authorization_servers": []string{srvURL},
+			})
+		})
+		mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                           srvURL,
+				"authorization_endpoint":           srvURL + "/authorize",
+				"token_endpoint":                   srvURL + "/token",
+				"jwks_uri":                         srvURL + "/jwks",
+				"code_challenge_methods_supported": []string{"S256"},
+			})
+		})
+		mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+			if resource := r.FormValue("resource"); resource != srvURL+"/mcp" {
+				t.Errorf("resource = %q, want %q (the connect URL fallback)", resource, srvURL+"/mcp")
+			}
+			tokenHits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": access, "token_type": "Bearer"})
+		})
+		return mux
+	})
+
+	if got != access {
+		t.Errorf("access token = %q, want %q", got, access)
 	}
 	if n := tokenHits.Load(); n != 1 {
 		t.Errorf("token endpoint hit %d times, want 1", n)
