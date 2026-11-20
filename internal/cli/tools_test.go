@@ -245,6 +245,104 @@ func TestToolsCallBadPairFailsFast(t *testing.T) {
 	}
 }
 
+// toolsCallGuidance is the golden guidance string for a wrong positional
+// count: the tool name is the only positional, and the ways to pass real
+// arguments are named so the next invocation can be correct.
+const toolsCallGuidance = "tools call takes the tool name as its only positional argument; " +
+	"pass tool arguments with --arg key=value (values JSON-decode: --arg count=3) or -A file.json"
+
+// TestToolsCallArgGuidance pins the custom positional validator on BOTH
+// bounds: two positionals and zero positionals get the same pre-connection
+// guidance (cobra's bare ExactArgs text names no --arg), and a >1-only check
+// would let the zero-arg form through to a post-connect panic on args[0].
+func TestToolsCallArgGuidance(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, addEchoTool)
+
+	_, _, _, err := runRoot(t, "--url", srv.URL, "--auth", "none", "tools", "call", "a", "b")
+	if err == nil || !strings.Contains(err.Error(), toolsCallGuidance) {
+		t.Fatalf("tools call with two positionals = %v, want the argument guidance", err)
+	}
+
+	_, _, _, err = runRoot(t, "--url", srv.URL, "--auth", "none", "tools", "call")
+	if err == nil || !strings.Contains(err.Error(), toolsCallGuidance) {
+		t.Fatalf("tools call with no positional = %v, want the same guidance (a >1-only check panics on args[0] after connecting)", err)
+	}
+}
+
+// TestToolsCallUnknownToolListsAvailable: an unknown tool name fails with the
+// server's error plus an appended "available tools:" line built from one
+// ListTools fetch. The hostileESC-named registration proves the enrichment
+// sanitizes this second server-supplied names site: the echoed line carries
+// the sanitized names and no escape byte anywhere.
+func TestToolsCallUnknownToolListsAvailable(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, func(s *mcp.Server) {
+		addEchoTool(s)
+		s.AddTool(&mcp.Tool{
+			Name:        hostileESC,
+			Description: "Hostile name",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "never called"}}}, nil
+		})
+	})
+
+	_, stderr, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "nonexistent")
+	if err == nil || !strings.Contains(err.Error(), "available tools: ") {
+		t.Fatalf("unknown tool call = %v, want the appended available-tools line", err)
+	}
+	if !strings.Contains(err.Error(), "echo") {
+		t.Errorf("error %q does not list the echo tool", err)
+	}
+	assertNoESC(t, "stderr", stderr)
+	assertNoESC(t, "error", err.Error())
+}
+
+// TestToolsCallIsErrorHintsParameters: a rejected call (isError result) adds
+// one stderr note naming the tool's parameters with the required ones marked,
+// sorted for a deterministic golden. In --json mode stdout stays exactly the
+// one result document and the ErrToolError failure is unchanged — the note
+// rides stderr in both modes.
+func TestToolsCallIsErrorHintsParameters(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, func(s *mcp.Server) {
+		s.AddTool(&mcp.Tool{
+			Name:        "fail",
+			Description: "Always fails",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{},"count":{}},"required":["count"]}`),
+		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: "missing count"}},
+			}, nil
+		})
+	})
+
+	// Human mode: the note lands on stderr beside the tool's error content.
+	_, stderr, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "fail")
+	if err == nil || !strings.Contains(err.Error(), "tool returned an error") {
+		t.Fatalf("tools call fail = %v, want ErrToolError", err)
+	}
+	if !strings.Contains(stderr, "fail parameters: count (required), text") {
+		t.Errorf("human stderr %q lacks the sorted required-marked parameter note", stderr)
+	}
+
+	// JSON mode: stdout stays the one result document, the command still
+	// fails with ErrToolError, and the note still rides stderr.
+	stdout, stderr, _, err := runRoot(t, "--url", srv.URL, "--json", "tools", "call", "fail")
+	if err == nil || !strings.Contains(err.Error(), "tool returned an error") {
+		t.Fatalf("tools call fail --json = %v, want ErrToolError", err)
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("tools call fail --json stdout %q is not one JSON document: %v", stdout, err)
+	}
+	if res["isError"] != true {
+		t.Errorf("isError = %v in %q, want true", res["isError"], stdout)
+	}
+	if !strings.Contains(stderr, "fail parameters: count (required), text") {
+		t.Errorf("--json stderr %q lacks the parameter note", stderr)
+	}
+}
+
 // addImageTool registers a tool whose result is one image content block with
 // fixed decoded bytes, so --outfile tests can assert the exact file content.
 func addImageTool(s *mcp.Server) {

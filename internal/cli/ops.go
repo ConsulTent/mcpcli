@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,10 +40,26 @@ func opListTools(ctx context.Context, s *mcp.ClientSession, out io.Writer) error
 // A non-empty outfile diverts image/audio blocks to files (write first, so a
 // write failure fails fast) before the result renders in either mode. An
 // isError result never writes, whatever outfile says.
+//
+// Two smart-error enrichments guide the next invocation, both fail-open (a
+// failed guidance fetch never masks the original outcome): an unknown tool
+// name appends the available tools to the returned error, and a rejected call
+// (isError result) prints one stderr note naming the tool's parameters —
+// before the mode branch, so both render modes get it on errOut while
+// stdout's one-document contract and ErrToolError's pinned string stay
+// untouched.
 func opCallTool(ctx context.Context, s *mcp.ClientSession, name string, args map[string]any, out, errOut io.Writer, outfile string) error {
 	res, err := s.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
-		return fmt.Errorf("call tool %s: %w", name, err)
+		callErr := fmt.Errorf("call tool %s: %w", name, err)
+		if !isUnknownTool(err, name) {
+			return callErr
+		}
+		names, ok := availableToolNames(ctx, s)
+		if !ok {
+			return callErr
+		}
+		return fmt.Errorf("call tool %s: %w\navailable tools: %s", name, err, strings.Join(names, ", "))
 	}
 	if outfile != "" && !res.IsError {
 		medias := toolMedia(res)
@@ -52,6 +69,9 @@ func opCallTool(ctx context.Context, s *mcp.ClientSession, name string, args map
 		if err := writeMediaFiles(outfile, medias, errOut); err != nil {
 			return err
 		}
+	}
+	if res.IsError {
+		hintToolParams(ctx, s, name, errOut)
 	}
 	if ui.Current == ui.JSON {
 		if err := format.EmitJSON(out, res); err != nil {
@@ -63,6 +83,96 @@ func opCallTool(ctx context.Context, s *mcp.ClientSession, name string, args map
 		return nil
 	}
 	return format.ToolCall(out, errOut, res)
+}
+
+// isUnknownTool reports whether a CallTool error means the server has no tool
+// with that name (as opposed to rejecting its arguments). Matches the wire
+// shape observed from SDK servers — `calling "tools/call": unknown tool
+// "NAME"` — the isMethodNotFound precedent's two-contains form, with the
+// called name quoted so a merely tool-adjacent error message cannot trip it.
+// A false positive only ever appends a truthful tool list.
+func isUnknownTool(err error, name string) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "unknown tool") && strings.Contains(s, `"`+strings.ToLower(name)+`"`)
+}
+
+// availableToolNames lists the server's tool names for the unknown-tool
+// guidance: one ListTools round-trip, single-page exactly like "tools list".
+// Each server-supplied name is filtered through sanitizeNote and nil entries
+// are skipped (a JSON null in the server's []*mcp.Tool must not panic — the
+// adapter.go guard's shape). ok is false only when the listing itself fails,
+// so callers can fail open to the original error; an empty list is still
+// returned (the empty tail of the guidance line is truthful).
+func availableToolNames(ctx context.Context, s *mcp.ClientSession) (names []string, ok bool) {
+	res, err := s.ListTools(ctx, nil)
+	if err != nil {
+		return nil, false
+	}
+	for _, t := range res.Tools {
+		if t == nil {
+			continue
+		}
+		names = append(names, sanitizeNote(t.Name))
+	}
+	return names, true
+}
+
+// hintToolParams writes one stderr note naming the called tool's parameters
+// with the required ones marked, when a rejected call suggests bad arguments:
+// `fail parameters: count (required), text`. The names come from the tool's
+// InputSchema via its own ListTools fetch (a CallToolResult carries no
+// schema), sorted for deterministic output. Every read is comma-ok and
+// fail-open — a hostile schema shape (non-map schema, non-list required,
+// non-string entries) means no note, never a panic. Zero names means no note
+// (schemaDriftNote's len==0 form).
+func hintToolParams(ctx context.Context, s *mcp.ClientSession, name string, errOut io.Writer) {
+	res, err := s.ListTools(ctx, nil)
+	if err != nil {
+		return
+	}
+	var tool *mcp.Tool
+	for _, t := range res.Tools {
+		if t != nil && t.Name == name {
+			tool = t
+			break
+		}
+	}
+	if tool == nil {
+		return
+	}
+	schema, ok := tool.InputSchema.(map[string]any)
+	if !ok {
+		return
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok || len(props) == 0 {
+		return
+	}
+	required := make(map[string]bool)
+	if reqList, ok := schema["required"].([]any); ok {
+		for _, r := range reqList {
+			if str, ok := r.(string); ok {
+				required[str] = true
+			}
+		}
+	}
+	names := make([]string, 0, len(props))
+	for key := range props {
+		names = append(names, key)
+	}
+	slices.Sort(names)
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		if required[n] {
+			parts = append(parts, sanitizeNote(n)+" (required)")
+		} else {
+			parts = append(parts, sanitizeNote(n))
+		}
+	}
+	_, _ = fmt.Fprintln(errOut, sanitizeNote(name)+" parameters: "+strings.Join(parts, ", "))
 }
 
 // resourcesListJSON is the --json shape of "resources list": one document

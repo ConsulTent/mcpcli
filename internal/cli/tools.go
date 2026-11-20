@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
 	"maps"
 
@@ -69,7 +70,7 @@ the file's content becomes the argument as a raw string, which is the
 point: large or quoted text goes file-to-wire untouched. Each --in-file
 read is capped at 8 MiB and must be valid UTF-8; tools call has no primary
 text input, so a bare PATH (no KEY=) is an error here.`,
-		Args: cobra.ExactArgs(1),
+		Args: validateToolsCallArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Parse and merge the arguments before any connection is opened,
 			// so malformed input fails fast without touching the network.
@@ -87,6 +88,19 @@ text input, so a bare PATH (no KEY=) is an error here.`,
 	cmd.Flags().StringArrayVar(&inFiles, "in-file", nil, `raw-string text argument from FILE as KEY=PATH ("-" for stdin read once; repeatable; loads after --arg-file, before --arg; 8 MiB cap, must be UTF-8)`)
 	cmd.Flags().StringVar(&outfile, "outfile", "", "write image/audio content to FILE; extension from MIME type, numbered NAME.N.EXT when multiple")
 	return cmd
+}
+
+// validateToolsCallArgs rejects any positional count other than exactly one —
+// BOTH bounds, pre-connection: cobra's bare ExactArgs text never names --arg,
+// and a >1-only check would let a zero-arg invocation through to RunE, where
+// args[0] panics after the connection succeeds. The guidance names the ways to
+// pass real arguments so the next invocation can be correct.
+func validateToolsCallArgs(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 {
+		return errors.New("tools call takes the tool name as its only positional argument; " +
+			"pass tool arguments with --arg key=value (values JSON-decode: --arg count=3) or -A file.json")
+	}
+	return nil
 }
 
 // buildToolArgs merges the argument sources in precedence order: the -A

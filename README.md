@@ -222,6 +222,9 @@ mcp --command "npx -y @modelcontextprotocol/server-everything" tools call add --
   without touching the network.
 - A tool result with `isError` set fails the command (exit 1) and never writes `--outfile`
   files. In `--json` mode the full `CallToolResult` still reaches stdout first.
+- Failed calls guide the next invocation: an unknown tool name lists the available tools on
+  the error's tail, and rejected arguments print the tool's parameters (required ones
+  marked) as one stderr note.
 
 ### resources read
 
