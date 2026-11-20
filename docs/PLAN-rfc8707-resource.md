@@ -1,9 +1,13 @@
 # Plan: client-credentials vs resource-indicator MCP servers (RFC 8707)
 
-Status: planned — not started. Written 2026-11-20 after a live probe
+Status: **superseded — implemented in v1.5.1** by
+docs/superpowers/specs/2026-11-20-v1.5.1-atlassian-followup-design.md (both
+layers fixed: the PRM fetch is mismatch-tolerant with the advertised resource
+as the token audience, and the token request sends the RFC 8707 indicator;
+`--resource` overrides). Originally written 2026-11-20 after a live probe
 against an OAuth-armed MCP appliance (librarium, which enforces resource
-indicators per the MCP authorization spec). This document is the outline
-for a future fix process; no code has changed.
+indicators per the MCP authorization spec) as the outline for the fix
+process. Upstream context: modelcontextprotocol/go-sdk#1538.
 
 ## The problem
 
