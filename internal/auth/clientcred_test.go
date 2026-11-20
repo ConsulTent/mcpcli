@@ -194,6 +194,13 @@ func TestClientCredAuthorizeFlow(t *testing.T) {
 // endpoint issued. The mux builder receives the server URL because the
 // discovery documents carry absolute URLs.
 func driveClientCredAuthorize(t *testing.T, newMux func(srvURL string) *http.ServeMux) string {
+	return driveClientCredAuthorizeWith(t, newMux, nil)
+}
+
+// driveClientCredAuthorizeWith is driveClientCredAuthorize with a hook over
+// the Build Params — the --resource override cell sets Params.Resource on
+// it; a nil hook changes nothing.
+func driveClientCredAuthorizeWith(t *testing.T, newMux func(srvURL string) *http.ServeMux, adjust func(*Params)) string {
 	t.Helper()
 
 	srv := httptest.NewServer(http.NewServeMux())
@@ -209,10 +216,14 @@ func driveClientCredAuthorize(t *testing.T, newMux func(srvURL string) *http.Ser
 	if err != nil {
 		t.Fatalf("ProviderFor(client-credentials): %v", err)
 	}
-	h, cleanup, err := p.Build(context.Background(), Params{
+	params := Params{
 		Target: srv.URL + "/mcp",
 		Creds:  ResolveCredentials("", ""),
-	})
+	}
+	if adjust != nil {
+		adjust(&params)
+	}
+	h, cleanup, err := p.Build(context.Background(), params)
 	if err != nil {
 		t.Fatalf("client-credentials Build: %v", err)
 	}
@@ -393,6 +404,62 @@ func TestClientCredMissingPRMResourceFallsBackToTarget(t *testing.T) {
 		})
 		return mux
 	})
+
+	if got != access {
+		t.Errorf("access token = %q, want %q", got, access)
+	}
+	if n := tokenHits.Load(); n != 1 {
+		t.Errorf("token endpoint hit %d times, want 1", n)
+	}
+}
+
+// TestClientCredResourceFlagOverrides pins the --resource flag's precedence:
+// when Params carry an explicit Resource, the token request sends it as the
+// RFC 8707 resource indicator in place of the one the protected-resource
+// metadata advertises — flag over advertised. Riding the issuer-form cell's
+// harness (PRM advertises srvURL) is what makes the pin unambiguous: the
+// only value other than the flag the flow could send is the advertised one.
+func TestClientCredResourceFlagOverrides(t *testing.T) {
+	const (
+		access   = "override-access-token"
+		override = "https://override.example.com"
+	)
+	var tokenHits atomic.Int32
+
+	got := driveClientCredAuthorizeWith(t, func(srvURL string) *http.ServeMux {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("WWW-Authenticate",
+				`Bearer resource_metadata="`+srvURL+`/.well-known/oauth-protected-resource"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+		mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"resource":              srvURL, // advertised; the flag must beat it
+				"authorization_servers": []string{srvURL},
+			})
+		})
+		mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                           srvURL,
+				"authorization_endpoint":           srvURL + "/authorize",
+				"token_endpoint":                   srvURL + "/token",
+				"jwks_uri":                         srvURL + "/jwks",
+				"code_challenge_methods_supported": []string{"S256"},
+			})
+		})
+		mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+			if resource := r.FormValue("resource"); resource != override {
+				t.Errorf("resource = %q, want %q (--resource overrides the advertised %s)", resource, override, srvURL)
+			}
+			tokenHits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": access, "token_type": "Bearer"})
+		})
+		return mux
+	}, func(p *Params) { p.Resource = override })
 
 	if got != access {
 		t.Errorf("access token = %q, want %q", got, access)

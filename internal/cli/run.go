@@ -67,11 +67,12 @@ func runWithConnection(ctx context.Context, f *GlobalFlags, errOut io.Writer, fn
 		return err
 	}
 	handler, cleanup, err := provider.Build(ctx, auth.Params{
-		Target: target,
-		Creds:  auth.ResolveCredentials(f.ClientID, f.ClientSecret),
-		Stderr: os.Stderr,
-		Stdin:  os.Stdin,
-		Flow:   f.AuthFlow,
+		Target:   target,
+		Creds:    auth.ResolveCredentials(f.ClientID, f.ClientSecret),
+		Stderr:   os.Stderr,
+		Stdin:    os.Stdin,
+		Flow:     f.AuthFlow,
+		Resource: f.Resource,
 	})
 	tracer.SetPhase("build", time.Since(buildStart))
 	if err != nil {

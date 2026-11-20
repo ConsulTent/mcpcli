@@ -24,13 +24,23 @@ import (
 // it doubles as the token-cache key. Creds holds client credentials resolved
 // from flags and environment. Stderr/Stdin are the command's streams for
 // providers that interact with the user (the OAuth provider added later uses
-// them). Flow is the OAuth flow flavor: "loopback" or "manual".
+// them). Flow is the OAuth flow flavor: "loopback" or "manual". Resource is
+// the RFC 8707 resource override for client-credentials auth — flag-only,
+// no env.
 type Params struct {
 	Target string
 	Creds  Credentials
 	Stderr io.Writer
 	Stdin  io.Reader
 	Flow   string
+
+	// Resource carries the --resource flag: the explicit RFC 8707 resource
+	// indicator that replaces the server-advertised one in the
+	// client-credentials grant. Only the client-credentials provider reads
+	// it; the root gate keeps it out of every other mode. Flag-only by
+	// design — resource is not a secret, and the house env vars are
+	// credentials and selectors.
+	Resource string
 }
 
 // Provider supplies auth handlers for one --auth mode.

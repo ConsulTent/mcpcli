@@ -68,6 +68,24 @@ func TestRootRejectsAuthFlowWithoutOauth(t *testing.T) {
 	}
 }
 
+// TestRootRejectsResourceWithoutClientCredentials: --resource is consumed
+// only by the client-credentials provider, so an explicitly-set combination
+// with any other --auth mode is rejected with guidance instead of being
+// silently ignored. The gate fires in PersistentPreRunE, before any
+// connection: against a live test server the rejected run must never reach
+// the network.
+func TestRootRejectsResourceWithoutClientCredentials(t *testing.T) {
+	srv := newTestMCPServer(t)
+
+	_, _, _, err := runRoot(t, "--url", srv.URL, "--auth", "bearer", "--resource", "x", "tools", "list")
+	if err == nil {
+		t.Fatal("--resource without --auth client-credentials = nil error, want rejection")
+	}
+	if !strings.Contains(err.Error(), "--resource only applies to --auth client-credentials") {
+		t.Errorf("error %q does not explain the --resource restriction", err.Error())
+	}
+}
+
 func TestRootHelpShowsCopyright(t *testing.T) {
 	cmd := NewRootCommand()
 	var buf bytes.Buffer

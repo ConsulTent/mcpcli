@@ -30,6 +30,7 @@ type GlobalFlags struct {
 	URL          string
 	Auth         string
 	AuthFlow     string
+	Resource     string
 	Protocol     string
 	ClientID     string
 	ClientSecret string
@@ -134,6 +135,15 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 			if cmd.Flags().Changed("auth-flow") && g.Auth != "oauth" && !isAuthLogin {
 				return errors.New("--auth-flow only applies to --auth oauth")
 			}
+			// --resource is consumed only by the client-credentials
+			// provider, so an explicitly-set combination with any other
+			// --auth mode is rejected rather than silently ignored — the
+			// --auth-flow precedent. Unlike --auth-flow there is no
+			// "auth login" exemption: auth login always runs the oauth
+			// provider, so the flag can never be meaningful there.
+			if cmd.Flags().Changed("resource") && g.Auth != "client-credentials" {
+				return errors.New("--resource only applies to --auth client-credentials")
+			}
 			// --env validation and classification: the flag's one parse
 			// site. Malformed input fails on ANY command here — not
 			// silently at expansion time on connection commands only.
@@ -204,6 +214,7 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 	pf.StringVar(&g.URL, "url", "", "streamable HTTP endpoint of the MCP server")
 	pf.StringVar(&g.Auth, "auth", "none", "auth mode: none, bearer, client-credentials, oauth, basic")
 	pf.StringVar(&g.AuthFlow, "auth-flow", "loopback", "OAuth flow: loopback or manual (only used with --auth oauth)")
+	pf.StringVar(&g.Resource, "resource", "", "request this resource (RFC 8707) instead of the server-advertised one (client-credentials auth)")
 	pf.StringVar(&g.Protocol, "protocol", "auto", `MCP protocol version: auto, draft, or a date such as "2025-06-18"`)
 	pf.StringVar(&g.ClientID, "client-id", "", "client ID (OAuth) or Basic username/email (env MCPCLI_CLIENT_ID)")
 	pf.StringVar(&g.ClientSecret, "client-secret", "", "client secret (OAuth, bearer token, or Basic token) (env MCPCLI_CLIENT_SECRET)")

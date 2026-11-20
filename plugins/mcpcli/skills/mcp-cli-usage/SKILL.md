@@ -42,6 +42,7 @@ scripts and CI.
 | `--url` | | streamable HTTP endpoint of the MCP server |
 | `--auth` | `none` | `none`, `bearer`, `client-credentials`, `oauth`, `basic` (HTTP only; stdio rejects it) |
 | `--auth-flow` | `loopback` | OAuth flow: `loopback` or `manual`; only used with `--auth oauth`; `manual` reads a pasted code from stdin (headless-safe) |
+| `--resource` | | request this resource (RFC 8707) instead of the server-advertised one (client-credentials auth) |
 | `--protocol` | `auto` | `auto`, `draft`, or a protocol date such as `2025-06-18` |
 | `--client-id` | | OAuth client ID or Basic username/email (env `MCPCLI_CLIENT_ID`) |
 | `--client-secret` | | OAuth client secret / bearer token / Basic token (env `MCPCLI_CLIENT_SECRET`); flags win over env |

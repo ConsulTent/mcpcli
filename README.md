@@ -283,7 +283,7 @@ Select with `--auth`; only streamable-HTTP servers authenticate (stdio servers r
 |---|---|
 | `none` (default) | No Authorization header |
 | `bearer` | Sends `--client-secret` as a static `Authorization: Bearer <token>`; no discovery, no refresh — a rejected token surfaces as the 401 it is. OAuth 2.1 is the MCP spec's formal HTTP authorization; bearer is a pragmatic convenience for servers that accept static tokens, not a spec-defined mode. |
-| `client-credentials` | Two-legged OAuth2 grant. Requires both credentials. The token endpoint is discovered from the server's 401 (WWW-Authenticate resource metadata, then the default protected-resource metadata location, then RFC 8414 metadata on the request origin); the requested scopes are those the authorization server advertises. |
+| `client-credentials` | Two-legged OAuth2 grant. Requires both credentials. The token endpoint is discovered from the server's 401 (WWW-Authenticate resource metadata, then the default protected-resource metadata location, then RFC 8414 metadata on the request origin); the requested scopes are those the authorization server advertises. The grant requests the advertised resource as its RFC 8707 resource indicator — the one the protected-resource metadata names, falling back to the connect URL; `--resource` overrides both. |
 | `oauth` | The SDK's authorization-code flow (RFC 8414 discovery, PKCE, refresh token requested). mcp never launches a browser: the `loopback` flow (`--auth-flow loopback`, default) prints the authorization URL and waits for your browser to hit a local receiver on `127.0.0.1`; `--auth-flow manual` prints the URL and reads the pasted authorization code from stdin for headless runs. With `--client-id` set, that pre-registered client is used (confidential when `--client-secret` is set too, public otherwise); without it, dynamic client registration. The OAuth wait is bounded by `--timeout`. |
 | `basic` | Sends `Authorization: Basic base64(<user>:<token>)` — `--client-id` is the username (an account email; Atlassian personal API tokens) and `--client-secret` the token. Like bearer: no discovery, no refresh — a rejected credential surfaces as the 401 it is. The header is scoped to the MCP target host, so authorization-server metadata requests never carry it. |
 
@@ -736,6 +736,7 @@ only `exit`, `quit`, or end of input leaves it.
 | `--url` | | streamable HTTP endpoint of the MCP server |
 | `--auth` | `none` | `none`, `bearer`, `client-credentials`, `oauth`, `basic` |
 | `--auth-flow` | `loopback` | OAuth flow: `loopback` or `manual` |
+| `--resource` | | request this resource (RFC 8707) instead of the server-advertised one (client-credentials auth) |
 | `--protocol` | `auto` | `auto`, `draft`, or a protocol date such as `2025-06-18` |
 | `--client-id` | | OAuth client ID or Basic username/email (env `MCPCLI_CLIENT_ID`) |
 | `--client-secret` | | OAuth client secret (env `MCPCLI_CLIENT_SECRET`); also the bearer token or the Basic token |

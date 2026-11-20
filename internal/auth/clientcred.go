@@ -39,12 +39,16 @@ func (clientCredentialsProvider) Build(_ context.Context, p Params) (sdkauth.OAu
 				"or set MCPCLI_CLIENT_ID and MCPCLI_CLIENT_SECRET")
 	}
 	// Build performs no network I/O; discovery happens lazily in Authorize.
-	return &ccHandler{creds: p.Creds, target: p.Target}, nil, nil
+	return &ccHandler{creds: p.Creds, target: p.Target, override: p.Resource}, nil, nil
 }
 
 type ccHandler struct {
 	creds  Credentials
 	target string
+	// override is the explicit --resource value (Params.Resource). When set
+	// it wins over both the advertised resource and the connect-URL
+	// fallback; empty means use the discovered value.
+	override string
 
 	mu  sync.Mutex
 	src oauth2.TokenSource // nil until Authorize discovers the token endpoint
@@ -65,6 +69,12 @@ func (h *ccHandler) Authorize(ctx context.Context, req *http.Request, resp *http
 	defer resp.Body.Close()
 
 	issuer, resource := h.discoverIssuer(ctx, req, resp)
+	// An explicit --resource overrides whatever discovery produced —
+	// precedence flag > advertised > connect URL. Discovery still runs: the
+	// issuer (token endpoint) is needed either way.
+	if h.override != "" {
+		resource = h.override
+	}
 
 	meta, err := sdkauth.GetAuthServerMetadata(ctx, issuer, http.DefaultClient)
 	if err != nil {
@@ -81,9 +91,10 @@ func (h *ccHandler) Authorize(ctx context.Context, req *http.Request, resp *http
 	//
 	// Resource choice (RFC 8707): the resource the protected-resource
 	// metadata advertises — the RFC-correct audience — falling back to the
-	// connect URL. The indicator rides EndpointParams under the "resource"
-	// key, never "scope": a collision there returns an "oauth2: cannot
-	// overwrite parameter" error.
+	// connect URL, with an explicit --resource (h.override, applied above)
+	// replacing both. The indicator rides EndpointParams under the
+	// "resource" key, never "scope": a collision there returns an
+	// "oauth2: cannot overwrite parameter" error.
 	cfg := clientcredentials.Config{
 		ClientID:       h.creds.ClientID,
 		ClientSecret:   h.creds.ClientSecret,

@@ -730,11 +730,12 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 		target = f.Command
 	}
 	handler, cleanup, err := provider.Build(cctx, auth.Params{
-		Target: target,
-		Creds:  auth.ResolveCredentials(f.ClientID, f.ClientSecret),
-		Stderr: os.Stderr,
-		Stdin:  os.Stdin,
-		Flow:   f.AuthFlow,
+		Target:   target,
+		Creds:    auth.ResolveCredentials(f.ClientID, f.ClientSecret),
+		Stderr:   os.Stderr,
+		Stdin:    os.Stdin,
+		Flow:     f.AuthFlow,
+		Resource: f.Resource,
 	})
 	if err != nil {
 		return res, err
