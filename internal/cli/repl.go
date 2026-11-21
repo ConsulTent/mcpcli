@@ -29,7 +29,7 @@ const replUnknownCommand = "unknown command, try help"
 const replHelp = `mcp REPL commands:
   help                                  show this command list
   tools                                 list the server's tools
-  call NAME [JSON-OBJ] [--outfile FILE] call a tool; JSON-OBJ is a JSON object of arguments
+  call NAME [JSON-OBJ] [--outfile FILE] call a tool; JSON-OBJ is a JSON object of arguments; missing required ones fill from schema defaults
   resources                             list resources and resource templates
   read URI [--outfile FILE]             read a resource by URI
   prompts                               list the server's prompts
@@ -177,6 +177,9 @@ func replCall(ctx context.Context, fields []string, out, errOut io.Writer, s *mc
 			return err
 		}
 	}
+	// The REPL is always lenient — no --strict exists here — so a bare
+	// "call NAME" (nil args: the empty set) still picks up schema defaults.
+	args = applySchemaDefaults(ctx, s, rest[0], args, errOut)
 	return opCallTool(ctx, s, rest[0], args, out, errOut, outfile)
 }
 

@@ -169,6 +169,32 @@ func TestReplCallWithJSONObject(t *testing.T) {
 	}
 }
 
+// TestReplCallFillsSchemaDefaults: the REPL's bare "call NAME" line — no JSON
+// object, the nil-args path — fills too: the applier seeds the map before
+// injecting (assignment to a nil map panics) and the call succeeds with the
+// fill named on stderr. The fixture tool has ONE required param (k) so the
+// bare call can succeed once the fill lands (the fill cell's two-required
+// tool would still fail on the unfilled required query).
+func TestReplCallFillsSchemaDefaults(t *testing.T) {
+	session := openTestSession(t, newTestMCPServerWithTools(t, newDefaultsToolAdder("kdefault",
+		`{"type":"object","properties":{"k":{"type":"number","default":5}},"required":["k"]}`,
+		"k")))
+
+	stdout, stderr, err := driveRepl(t, session, "call kdefault\nexit\n", ui.Rich)
+	if err != nil {
+		t.Fatalf("repl call kdefault: %v", err)
+	}
+	if strings.Contains(stderr, "❌") {
+		t.Errorf("repl call stderr %q reports an error; the schema-defaults fill must precede the call", stderr)
+	}
+	if !strings.Contains(stdout, `"k":5`) {
+		t.Errorf("repl call stdout %q does not carry k filled from its default", stdout)
+	}
+	if !strings.Contains(stderr, "k=5") {
+		t.Errorf("repl call stderr %q does not name the k fill", stderr)
+	}
+}
+
 // TestReplBadLinesKeepLoopAlive: malformed input and failing operations each
 // report one error line on stderr and never kill the loop.
 func TestReplBadLinesKeepLoopAlive(t *testing.T) {

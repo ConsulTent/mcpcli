@@ -51,6 +51,49 @@ func addEchoTool(s *mcp.Server) {
 	})
 }
 
+// newDefaultsToolAdder builds an Add function registering one tool for the
+// smart-defaults fixtures. Its raw AddTool handler echoes req.Params.Arguments
+// verbatim and returns isError when one of the required parameters is ABSENT
+// from the raw args — an absence-only check (`_, ok := m[k]`), so a zero value
+// passes but a missing key never does, which is exactly what makes any
+// truthiness-based client fill flip the outcome and fail these cells. The raw
+// AddTool handler path performs no server-side schema processing (go-sdk
+// dispatches the handler unwrapped; input validation is the caller's job), so
+// the client's schema-defaults fill is the only thing that can turn the fill
+// cells green.
+func newDefaultsToolAdder(name, schema string, required ...string) func(*mcp.Server) {
+	return func(s *mcp.Server) {
+		s.AddTool(&mcp.Tool{
+			Name:        name,
+			Description: "Defaults fixture: echoes raw arguments, rejects absent required ones",
+			InputSchema: json.RawMessage(schema),
+		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			var m map[string]any
+			if len(req.Params.Arguments) > 0 {
+				if err := json.Unmarshal(req.Params.Arguments, &m); err != nil {
+					m = nil
+				}
+			}
+			for _, r := range required {
+				if _, ok := m[r]; !ok {
+					return &mcp.CallToolResult{
+						IsError: true,
+						Content: []mcp.Content{&mcp.TextContent{Text: "missing " + r}},
+					}, nil
+				}
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(req.Params.Arguments)}}}, nil
+		})
+	}
+}
+
+// defaultsFillSchema is the fill cell's schema: required query (string, no
+// default) and required k (number, default 5), plus the OPTIONAL lang (string,
+// default "en") — the optional-with-default property exists so the
+// optional-never-fabricated ruling has its own assertion in the fill cell.
+const defaultsFillSchema = `{"type":"object","properties":{"query":{"type":"string"},` +
+	`"k":{"type":"number","default":5},"lang":{"type":"string","default":"en"}},"required":["query","k"]}`
+
 // TestToolsListE2E: a server with one tool lists its name and description.
 func TestToolsListE2E(t *testing.T) {
 	srv := newTestMCPServerWithTools(t, addEchoTool)
@@ -340,6 +383,258 @@ func TestToolsCallIsErrorHintsParameters(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "fail parameters: count (required), text") {
 		t.Errorf("--json stderr %q lacks the parameter note", stderr)
+	}
+}
+
+// TestToolsCallFillSchemaDefaults pins the smart-defaults fill: a required
+// parameter ABSENT from the arguments but carrying a schema `default` is
+// filled client-side before the call, and the fill is named on stderr in both
+// modes. The fixture's raw handler echoes the RAW arguments, so the echo
+// proves what actually went over the wire: k arrives as its default 5, the
+// user's query survives verbatim, and the optional lang — which also declares
+// a default — stays absent (absence is not zero: optional parameters are
+// never fabricated).
+func TestToolsCallFillSchemaDefaults(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, newDefaultsToolAdder("defaults", defaultsFillSchema, "query", "k"))
+
+	// Human mode: the call succeeds, the echo carries the fill, the note
+	// names it with its value.
+	stdout, stderr, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "defaults",
+		"--arg", "query=What is in my documents?")
+	if err != nil {
+		t.Fatalf("tools call defaults with missing k = %v, want the schema-defaults fill to succeed (stderr %q)", err, stderr)
+	}
+	if !strings.Contains(stdout, `"query":"What is in my documents?"`) {
+		t.Errorf("stdout %q does not carry the user's query verbatim", stdout)
+	}
+	if !strings.Contains(stdout, `"k":5`) {
+		t.Errorf("stdout %q does not carry k filled from its schema default 5", stdout)
+	}
+	if strings.Contains(stdout, `"lang"`) {
+		t.Errorf("stdout %q carries lang; an optional parameter must never be fabricated", stdout)
+	}
+	if !strings.Contains(stderr, "k=5") {
+		t.Errorf("stderr %q does not name the k fill with its value", stderr)
+	}
+
+	// JSON mode: stdout parses as exactly ONE CallToolResult document (a
+	// concatenated second document makes Unmarshal fail) carrying the echoed
+	// k=5, and the fill note is the first — and only — stderr emission on the
+	// success path.
+	stdout, stderr, dec, err := runRoot(t, "--url", srv.URL, "--json", "tools", "call", "defaults",
+		"--arg", "query=What is in my documents?")
+	if err != nil {
+		t.Fatalf("tools call defaults --json = %v, want success (stderr %q)", err, stderr)
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("tools call defaults --json stdout %q is not exactly one JSON document: %v", stdout, err)
+	}
+	content, ok := res["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("content = %v in %q, want one text block", res["content"], stdout)
+	}
+	block, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("content[0] = %v in %q, want a text block", content[0], stdout)
+	}
+	text, _ := block["text"].(string)
+	if !strings.Contains(text, `"k":5`) || !strings.Contains(text, `"query":"What is in my documents?"`) {
+		t.Errorf("--json echoed args %q lack the k fill or the user's query", text)
+	}
+	if strings.Contains(text, `"lang"`) {
+		t.Errorf("--json echoed args %q carry lang; an optional parameter must never be fabricated", text)
+	}
+	if want := "filled missing arguments from schema defaults: k=5\n"; stderr != want {
+		t.Errorf("--json stderr = %q, want exactly the one fill note %q", stderr, want)
+	}
+	if dec != "" {
+		t.Errorf("--json wrote ui decoration: %q", dec)
+	}
+}
+
+// TestToolsCallStrictSkipsFill: --strict restores the pass-through shape — no
+// fill, no fill note, and the rejected call keeps the v1.5.1 parameter hint
+// (the failure path unchanged).
+func TestToolsCallStrictSkipsFill(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, newDefaultsToolAdder("defaults", defaultsFillSchema, "query", "k"))
+
+	_, stderr, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "defaults",
+		"--arg", "query=What is in my documents?", "--strict")
+	if err == nil || !strings.Contains(err.Error(), "tool returned an error") {
+		t.Fatalf("strict call = %v, want ErrToolError (the fill must not run under --strict)", err)
+	}
+	if !strings.Contains(stderr, "defaults parameters: k (required), lang, query (required)") {
+		t.Errorf("strict stderr %q lacks the v1.5.1 parameter hint", stderr)
+	}
+	if strings.Contains(stderr, "filled") {
+		t.Errorf("strict stderr %q carries a fill note; --strict must skip the fill", stderr)
+	}
+}
+
+// TestToolsCallRequiredWithoutDefault: a required parameter without a declared
+// default is never fabricated — the call still fails with the v1.5.1 hint in
+// BOTH modes, pre- and post-fix (a GREEN-both-ways guard for the no-fabrication
+// ruling).
+func TestToolsCallRequiredWithoutDefault(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, newDefaultsToolAdder("nodefault",
+		`{"type":"object","properties":{"query":{"type":"string"},"k":{"type":"number"}},"required":["query","k"]}`,
+		"query", "k"))
+
+	for _, mode := range []struct{ name, flag string }{{"lenient", ""}, {"strict", "--strict"}} {
+		args := []string{"--url", srv.URL, "tools", "call", "nodefault", "--arg", "query=What is in my documents?"}
+		if mode.flag != "" {
+			args = append(args, mode.flag)
+		}
+		_, stderr, _, err := runRoot(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "tool returned an error") {
+			t.Fatalf("%s call without a defaultable k = %v, want ErrToolError (nothing to fill from)", mode.name, err)
+		}
+		if !strings.Contains(stderr, "nodefault parameters: k (required), query") {
+			t.Errorf("%s stderr %q lacks the parameter hint", mode.name, stderr)
+		}
+		if strings.Contains(stderr, "filled") {
+			t.Errorf("%s stderr %q carries a fill note; a required param without a default must not be fabricated", mode.name, stderr)
+		}
+	}
+}
+
+// TestToolsCallNullDefaultIsNoDefault: an explicit JSON "default": null on a
+// required param is NO default (safety fold F-R2-2) — the nil-read guard must
+// skip it, so the call fails honestly instead of succeeding with k:null plus a
+// fill note (the exit-0-null class). GREEN-both-ways in both modes.
+func TestToolsCallNullDefaultIsNoDefault(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, newDefaultsToolAdder("nulldefault",
+		`{"type":"object","properties":{"k":{"default":null}},"required":["k"]}`,
+		"k"))
+
+	for _, mode := range []struct{ name, flag string }{{"lenient", ""}, {"strict", "--strict"}} {
+		args := []string{"--url", srv.URL, "tools", "call", "nulldefault"}
+		if mode.flag != "" {
+			args = append(args, mode.flag)
+		}
+		_, stderr, _, err := runRoot(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "tool returned an error") {
+			t.Fatalf("%s call with default:null k = %v, want ErrToolError (null is no default)", mode.name, err)
+		}
+		if strings.Contains(stderr, "filled") {
+			t.Errorf("%s stderr %q carries a fill note; a null default must not be injected", mode.name, stderr)
+		}
+	}
+}
+
+// TestToolsCallUserSuppliedWins: user sources always win — presence, not
+// truthiness, is the precedence test (safety fold F-R2-3). The query property
+// declares a "fallback" default in this fixture precisely so the empty-string
+// arm is live: a truthiness-based fill would treat the passed empty string as
+// absent and overwrite it with "fallback", failing the cell.
+func TestToolsCallUserSuppliedWins(t *testing.T) {
+	srv := newTestMCPServerWithTools(t, newDefaultsToolAdder("userwins",
+		`{"type":"object","properties":{"query":{"type":"string","default":"fallback"},"k":{"type":"number","default":5}},"required":["query","k"]}`,
+		"query", "k"))
+
+	// A user-supplied k=3 beats the default: the echo carries 3 and no fill
+	// note is written (GREEN both ways — the call also succeeded pre-fix).
+	stdout, stderr, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "userwins",
+		"--arg", "query=What is in my documents?", "--arg", "k=3")
+	if err != nil {
+		t.Fatalf("user k=3 call = %v, want success (stderr %q)", err, stderr)
+	}
+	if !strings.Contains(stdout, `"k":3`) {
+		t.Errorf("stdout %q does not carry the user's k=3", stdout)
+	}
+	if strings.Contains(stderr, "k=5") || strings.Contains(stderr, "filled") {
+		t.Errorf("stderr %q carries a fill note for a user-supplied argument", stderr)
+	}
+
+	// Presence, not truthiness: an empty-string query is PRESENT with a zero
+	// value — no query fill, no note for it — while k (absent) is still filled
+	// from its default; a zero value in one argument must not block the fill
+	// of another.
+	stdout, stderr, _, err = runRoot(t, "--url", srv.URL, "tools", "call", "userwins",
+		"--arg", "query=")
+	if err != nil {
+		t.Fatalf("empty-string query call = %v, want k filled from its default (stderr %q)", err, stderr)
+	}
+	if !strings.Contains(stdout, `"query":""`) {
+		t.Errorf("stdout %q does not keep the user's empty-string query verbatim", stdout)
+	}
+	if !strings.Contains(stdout, `"k":5`) {
+		t.Errorf("stdout %q does not carry k filled from its default despite the zero-value query", stdout)
+	}
+	if strings.Contains(stderr, "query=") || strings.Contains(stderr, "fallback") {
+		t.Errorf("stderr %q names a query fill; a present zero value must not be overwritten", stderr)
+	}
+
+	// --arg k=null decodes to a PRESENT nil value: no fill, no note, and the
+	// raw null rides to the handler whose absence-only check passes it (the
+	// fold's second zero-value arm; a truthiness fill would send k=5).
+	stdout, stderr, _, err = runRoot(t, "--url", srv.URL, "tools", "call", "userwins",
+		"--arg", "query=What is in my documents?", "--arg", "k=null")
+	if err != nil {
+		t.Fatalf("k=null call = %v, want success with the null kept (stderr %q)", err, stderr)
+	}
+	if !strings.Contains(stdout, `"k":null`) {
+		t.Errorf("stdout %q does not keep the user's k=null verbatim", stdout)
+	}
+	if strings.Contains(stdout, `"k":5`) {
+		t.Errorf("stdout %q carries k=5; a present null must not be overwritten", stdout)
+	}
+	if strings.Contains(stderr, "filled") {
+		t.Errorf("stderr %q carries a fill note for a present k=null", stderr)
+	}
+}
+
+// TestToolsCallHostileShapesFailOpen: hostile schema shapes fail open to the
+// original args (GREEN both ways — no fill ever happened, and no panic), and
+// the hostile-value arm carries the note's per-value cap: a 300-rune default
+// IS filled, but the stderr note must not contain the full string —
+// sanitizeNote's 160-rune cap bounds every server-supplied note value.
+func TestToolsCallHostileShapesFailOpen(t *testing.T) {
+	bigDefault := strings.Repeat("A", 300)
+	srv := newTestMCPServerWithTools(t, func(s *mcp.Server) {
+		newDefaultsToolAdder("noprops", `{"type":"object"}`, "k")(s)
+		newDefaultsToolAdder("orphanreq", `{"type":"object","properties":{"query":{"type":"string"}},"required":["k"]}`, "k")(s)
+		newDefaultsToolAdder("bigdefault",
+			fmt.Sprintf(`{"type":"object","properties":{"blob":{"type":"string","default":%q}},"required":["blob"]}`, bigDefault),
+			"blob")(s)
+	})
+
+	// Hostile shape: the schema omits properties entirely — the applier's
+	// comma-ok read fails and the original args go out unchanged.
+	_, stderr, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "noprops")
+	if err == nil || !strings.Contains(err.Error(), "tool returned an error") {
+		t.Fatalf("noprops call = %v, want ErrToolError (fail open to the original args)", err)
+	}
+	if strings.Contains(stderr, "filled") {
+		t.Errorf("noprops stderr %q carries a fill note; a properties-less schema must fail open", stderr)
+	}
+
+	// Hostile shape: required names a key properties lacks — the nil property
+	// read yields no default, so the same nil-default guard skips the fill.
+	_, stderr, _, err = runRoot(t, "--url", srv.URL, "tools", "call", "orphanreq")
+	if err == nil || !strings.Contains(err.Error(), "tool returned an error") {
+		t.Fatalf("orphanreq call = %v, want ErrToolError (fail open to the original args)", err)
+	}
+	if strings.Contains(stderr, "filled") {
+		t.Errorf("orphanreq stderr %q carries a fill note; a required-not-in-properties schema must fail open", stderr)
+	}
+
+	// Hostile VALUE: the 300-rune default is honored over the wire (the call
+	// succeeds and the echo carries all of it) but the note shows only the
+	// 160-rune-capped head.
+	stdout, stderr, _, err := runRoot(t, "--url", srv.URL, "tools", "call", "bigdefault")
+	if err != nil {
+		t.Fatalf("bigdefault call = %v, want the 300-rune default filled (stderr %q)", err, stderr)
+	}
+	if !strings.Contains(stdout, bigDefault) {
+		t.Errorf("stdout %q does not carry the full 300-rune default over the wire", stdout)
+	}
+	if !strings.Contains(stderr, strings.Repeat("A", 100)) {
+		t.Errorf("stderr %q does not carry the capped head of the big default", stderr)
+	}
+	if strings.Contains(stderr, bigDefault) {
+		t.Errorf("stderr %q carries the full 300-rune default; the note's value cap must bound it", stderr)
 	}
 }
 

@@ -207,6 +207,11 @@ mcp --command "npx -y @modelcontextprotocol/server-everything" tools call add --
   keys take the last value. `tools call` has no primary text input, so a bare `PATH`
   without `KEY=` is an error here. Each read prints `read <path> (N bytes)` to stderr in
   every mode. For whole JSON payloads `jq`-piped into `-A -` (below) remains the tool.
+- Missing required parameters fill from the tool's schema `default`s unless `--strict`;
+  each fill is named on stderr. User-supplied arguments always win (presence counts, not
+  truthiness — a passed empty string or `null` stays as-is), optional parameters are never
+  fabricated, and the fill costs one extra `tools/list` round-trip per call (`--strict`
+  skips both the fill and the round-trip).
 - `--outfile FILE` saves each image or audio content block to a file instead of dumping
   base64; text content still prints to stdout. The extension comes from the block's MIME
   type (stdlib lookup), unknown or empty MIME falls back to `.bin`, and any user-supplied

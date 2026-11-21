@@ -104,7 +104,8 @@ named in the JSON `"via"` field.
 
 Discover tools, then call one (arguments JSON-decode when they parse:
 `count=3` is the number 3, `x={"a":1}` an object; repeated keys: last wins;
-`-A file` loads a JSON object, `-` reads stdin):
+`-A file` loads a JSON object, `-` reads stdin; missing required arguments
+fill from the tool's schema `default`s — named on stderr — unless `--strict`):
 
 ```sh
 mcp --url "$SRV" --json tools list

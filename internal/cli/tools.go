@@ -54,6 +54,7 @@ func newToolsCallCommand() *cobra.Command {
 		argFile string
 		outfile string
 		inFiles []string
+		strict  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "call NAME",
@@ -79,6 +80,12 @@ text input, so a bare PATH (no KEY=) is an error here.`,
 				return err
 			}
 			return runWithConnection(cmd.Context(), FlagsFrom(cmd), cmd.ErrOrStderr(), func(ctx context.Context, session *mcp.ClientSession) error {
+				// Lenient by default: required params absent from the args take
+				// their schema defaults before the call. --strict skips both the
+				// fill and its ListTools round-trip — today's pass-through shape.
+				if !strict {
+					toolArgs = applySchemaDefaults(ctx, session, args[0], toolArgs, cmd.ErrOrStderr())
+				}
 				return opCallTool(ctx, session, args[0], toolArgs, cmd.OutOrStdout(), cmd.ErrOrStderr(), outfile)
 			})
 		},
@@ -87,6 +94,7 @@ text input, so a bare PATH (no KEY=) is an error here.`,
 	cmd.Flags().StringVarP(&argFile, "arg-file", "A", "", `JSON object of tool arguments from FILE ("-" for stdin); --arg pairs override it`)
 	cmd.Flags().StringArrayVar(&inFiles, "in-file", nil, `raw-string text argument from FILE as KEY=PATH ("-" for stdin read once; repeatable; loads after --arg-file, before --arg; 8 MiB cap, must be UTF-8)`)
 	cmd.Flags().StringVar(&outfile, "outfile", "", "write image/audio content to FILE; extension from MIME type, numbered NAME.N.EXT when multiple")
+	cmd.Flags().BoolVar(&strict, "strict", false, "fail on missing required tool arguments instead of filling them from schema defaults")
 	return cmd
 }
 

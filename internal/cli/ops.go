@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -173,6 +174,93 @@ func hintToolParams(ctx context.Context, s *mcp.ClientSession, name string, errO
 		}
 	}
 	_, _ = fmt.Fprintln(errOut, sanitizeNote(name)+" parameters: "+strings.Join(parts, ", "))
+}
+
+// applySchemaDefaults fills required parameters that are ABSENT from args with
+// the JSON `default` their property declares in the tool's input schema, and
+// returns the (possibly newly seeded) args map. The one-shot "tools call" gates
+// it on !strict; the REPL's call always applies it (no --strict exists there).
+//
+// Fill policy, per the converged battery's folds:
+//   - NIL ARGS IS THE EMPTY SET: the REPL passes a nil map when the line
+//     carries no JSON object, so the map is seeded before the first injection
+//     (assignment to a nil map would panic).
+//   - Presence, not truthiness, is the precedence test: a user-supplied value
+//     — an empty string, a JSON null, a zero number — is PRESENT and wins;
+//     defaults cover absences only.
+//   - A JSON `default` of null is NO default: one nil read covers the absent
+//     key, an explicit `default: null`, and a required name missing from
+//     properties (reading a nil map yields zero, never a panic). A declared
+//     0/""/false is injected as-is — the zero-value rejection bars FABRICATION
+//     (no declared default), never honoring declared defaults.
+//   - Optional parameters are never fabricated: absent means absent, and a
+//     fabricated `limit: 0` changes semantics.
+//   - Fail-open everywhere: a listing failure, a tool not found, or a hostile
+//     schema shape (non-map schema, no properties, non-list required,
+//     non-string entries) returns the original args unchanged — a data note,
+//     never a failure (the schemaDriftNote posture).
+//
+// When anything was filled, ONE stderr note names every fill in every output
+// mode; each value renders as sanitizeNote of its compact JSON so the 160-rune
+// cap bounds server-supplied VALUES on stderr (a hostile five-megabyte default
+// would otherwise dump megabytes per lenient call), and the name=value parts
+// sort by name for deterministic output (the hintToolParams discipline).
+func applySchemaDefaults(ctx context.Context, session *mcp.ClientSession, name string, args map[string]any, errOut io.Writer) map[string]any {
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		return args
+	}
+	var tool *mcp.Tool
+	for _, t := range res.Tools {
+		if t != nil && t.Name == name {
+			tool = t
+			break
+		}
+	}
+	if tool == nil {
+		return args
+	}
+	schema, ok := tool.InputSchema.(map[string]any)
+	if !ok {
+		return args
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return args
+	}
+	reqList, ok := schema["required"].([]any)
+	if !ok {
+		return args
+	}
+	var filled []string
+	for _, r := range reqList {
+		key, ok := r.(string)
+		if !ok {
+			continue
+		}
+		if _, ok := args[key]; ok {
+			continue // user sources win: presence, not truthiness
+		}
+		prop, _ := props[key].(map[string]any)
+		def := prop["default"] // nil-map read covers absent key, default:null, required-not-in-properties
+		if def == nil {
+			continue // JSON null is NO default
+		}
+		b, err := json.Marshal(def)
+		if err != nil {
+			continue // unreachable for JSON-decoded values; fail open without the fill
+		}
+		if args == nil {
+			args = map[string]any{} // nil args is the empty set; a nil map panics on assignment
+		}
+		args[key] = def
+		filled = append(filled, sanitizeNote(key)+"="+sanitizeNote(string(b)))
+	}
+	if len(filled) > 0 {
+		slices.Sort(filled) // unique names, so sorting the name=value parts sorts by name
+		_, _ = fmt.Fprintln(errOut, "filled missing arguments from schema defaults: "+strings.Join(filled, ", "))
+	}
+	return args
 }
 
 // resourcesListJSON is the --json shape of "resources list": one document

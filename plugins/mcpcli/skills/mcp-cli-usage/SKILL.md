@@ -81,6 +81,9 @@ mcp --url "$SRV" --json tools call generate-logo --arg prompt="red circle" --out
   `-A -` reads it from stdin.
 - `--outfile FILE` writes image/audio content blocks to files with
   MIME-derived extensions.
+- Missing required arguments fill from the tool's schema `default`s (one
+  stderr note names each fill) unless `--strict`; user-supplied values always
+  win.
 
 A tool error (`isError: true` in the result) still prints the full JSON
 result and exits 1 — parse stdout, then check the exit code.
