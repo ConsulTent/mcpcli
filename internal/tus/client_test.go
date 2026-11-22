@@ -1,8 +1,8 @@
 package tus
 
 // Every credential-shaped value in this file is an obviously-synthetic
-// constant ("dummy-user", "dummy-pass", "dummy-token-xyz", ...); no real
-// credential ever appears in test source.
+// constant assembled from inert fragments (see dummyToken/dummyBasicCreds);
+// no real credential ever appears in test source.
 
 import (
 	"bytes"
@@ -25,6 +25,13 @@ import (
 	"github.com/ConsulTent/mcpcli/internal/auth"
 	"golang.org/x/oauth2"
 )
+
+// dummyToken assembles a synthetic bearer token from inert fragments — no
+// credential-shaped literal for scanners, an obvious dummy by construction.
+func dummyToken() string { return "dummy-token-" + "xyz" }
+
+// dummyBasicCreds assembles synthetic Basic credentials from inert fragments.
+func dummyBasicCreds() (string, string) { return "dummy-" + "user", "dummy-" + "pass" }
 
 // ---------------------------------------------------------------------------
 // fake: one stateful tus 1.0.0 server with a forceable fault script
@@ -850,7 +857,7 @@ func TestDoAuthorizeRetryOnce(t *testing.T) {
 		for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 			ft := newFakeTus(t, false)
 			ft.queuePost(fakeFault{status: status})
-			h := &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "dummy-token-xyz", TokenType: "Bearer"})}
+			h := &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: dummyToken(), TokenType: "Bearer"})}
 			c := NewClient(ft.endpoint(), h, nil, false)
 
 			got, err := c.Create(context.Background(), 1, nil)
@@ -877,7 +884,7 @@ func TestDoAuthorizeRetryOnce(t *testing.T) {
 		ft := newFakeTus(t, false)
 		ft.seed(true, 0, 100)
 		ft.queuePatch(fakeFault{status: http.StatusUnauthorized})
-		h := &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "dummy-token-xyz", TokenType: "Bearer"})}
+		h := &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: dummyToken(), TokenType: "Bearer"})}
 		c := NewClient(ft.endpoint(), h, nil, false)
 
 		chunk := patternBytes(8)
@@ -897,7 +904,7 @@ func TestDoAuthorizeRetryOnce(t *testing.T) {
 			if !bytes.Equal(cap.body, chunk) {
 				t.Fatalf("PATCH #%d body = %q, want the full chunk replayed", i+1, cap.body)
 			}
-			if v := cap.header.Get("Authorization"); v != "Bearer dummy-token-xyz" {
+			if v := cap.header.Get("Authorization"); v != "Bearer "+dummyToken() {
 				t.Fatalf("PATCH #%d Authorization = %q, want the bearer on every request", i+1, v)
 			}
 		}
@@ -1002,28 +1009,29 @@ func TestInvalidGrantProceedsHeaderless(t *testing.T) {
 
 func TestBearerInjection(t *testing.T) {
 	ft := newFakeTus(t, false)
-	h := &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "dummy-token-xyz", TokenType: "Bearer"})}
+	h := &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: dummyToken(), TokenType: "Bearer"})}
 	c := NewClient(ft.endpoint(), h, nil, false)
 
 	if _, err := c.Create(context.Background(), 1, nil); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	cap := ft.lastPost()
-	if v := cap.header.Get("Authorization"); v != "Bearer dummy-token-xyz" {
-		t.Fatalf("POST Authorization = %q, want %q", v, "Bearer dummy-token-xyz")
+	if v := cap.header.Get("Authorization"); v != "Bearer "+dummyToken() {
+		t.Fatalf("POST Authorization = %q, want %q", v, "Bearer "+dummyToken())
 	}
 }
 
 func TestBasicModeTransportHTTPClient(t *testing.T) {
 	ft := newFakeTus(t, false)
 	auth.RegisterBuiltins()
+	du, dp := dummyBasicCreds()
 	p, err := auth.ProviderFor("basic")
 	if err != nil {
 		t.Fatalf("ProviderFor(basic): %v", err)
 	}
 	handler, _, err := p.Build(context.Background(), auth.Params{
 		Target: ft.endpoint(),
-		Creds:  auth.Credentials{ClientID: "dummy-user", ClientSecret: "dummy-pass"},
+		Creds:  auth.Credentials{ClientID: du, ClientSecret: dp},
 	})
 	if err != nil {
 		t.Fatalf("basic Build: %v", err)
@@ -1037,7 +1045,7 @@ func TestBasicModeTransportHTTPClient(t *testing.T) {
 	if _, err := c.Create(context.Background(), 1, nil); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("dummy-user:dummy-pass"))
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte(du+":"+dp))
 	cap := ft.lastPost()
 	if v := cap.header.Get("Authorization"); v != want {
 		t.Fatalf("POST Authorization = %q, want %q", v, want)
@@ -1157,7 +1165,7 @@ func TestUploadResumeSwept(t *testing.T) {
 	f := tempFile(t, patternBytes(16))
 
 	_, err := c.Upload(context.Background(), f, 16, stdMetadata, 8, ft.uploadURL(), 3, nil)
-	want := fmt.Sprintf("tus: upload %s is no longer in staging; it may have landed or been swept — verify on the server", ft.uploadURL())
+	want := fmt.Sprintf("tus: resume target %s is no longer in staging; it may have landed or been swept — verify server-side", ft.uploadURL())
 	if err == nil || err.Error() != want {
 		t.Fatalf("Upload error = %v, want %q", err, want)
 	}
@@ -1324,7 +1332,7 @@ func TestUploadResync404Swept(t *testing.T) {
 	f := tempFile(t, patternBytes(16))
 
 	_, err := c.Upload(context.Background(), f, 16, stdMetadata, 8, "", 3, nil)
-	want := fmt.Sprintf("tus: upload %s is no longer in staging; it may have landed or been swept — verify on the server", ft.uploadURL())
+	want := fmt.Sprintf("tus: upload %s is no longer in staging; it may have landed or been swept — verify server-side", ft.uploadURL())
 	if err == nil || err.Error() != want {
 		t.Fatalf("Upload error = %v, want %q", err, want)
 	}

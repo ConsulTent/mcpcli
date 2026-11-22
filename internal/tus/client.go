@@ -435,6 +435,9 @@ func (c *Client) Patch(ctx context.Context, url string, offset int64, body io.Re
 	if err != nil {
 		return 0, fmt.Errorf("tus: reading the PATCH body: %w", err)
 	}
+	if size != int64(len(payload)) {
+		return 0, fmt.Errorf("tus: the PATCH body is %d bytes, but size is %d", len(payload), size)
+	}
 	mkReq := func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(payload))
 		if err != nil {

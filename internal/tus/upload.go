@@ -71,7 +71,7 @@ func (c *Client) Upload(ctx context.Context, f *os.File, size int64, metadata ma
 			return "", herr
 		}
 		if !exists {
-			return "", fmt.Errorf("tus: upload %s is no longer in staging; it may have landed or been swept — verify on the server", resumeURL)
+			return "", fmt.Errorf("tus: resume target %s is no longer in staging; it may have landed or been swept — verify server-side", resumeURL)
 		}
 		if resumed > size {
 			return "", fmt.Errorf("tus: the staged upload %s is at offset %d, past the file's size %d; the file may have changed since it was staged", resumeURL, resumed, size)
@@ -117,7 +117,7 @@ func (c *Client) Upload(ctx context.Context, f *os.File, size int64, metadata ma
 			continue
 		}
 		if !exists {
-			return "", fmt.Errorf("tus: upload %s is no longer in staging; it may have landed or been swept — verify on the server", url)
+			return "", fmt.Errorf("tus: upload %s is no longer in staging; it may have landed or been swept — verify server-side", url)
 		}
 		switch {
 		case rOff == size:
