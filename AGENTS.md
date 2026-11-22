@@ -27,6 +27,9 @@ skill: `/plugin marketplace add ConsulTent/mcpcli`.
 
 - Invocation: `mcp [flags] <command>`. Exactly one of `--command` or `--url`
   identifies the target (`auth logout` accepts either and never connects).
+  The `tus` verbs are the other exception: they target a tus endpoint with
+  `--api-url` and never connect to an MCP server (`bws` is the same
+  precedent — its verbs take their own flags, no `--command`/`--url`).
 - Results go to stdout; decoration (progress lines, spinners) goes to stderr.
   Capture stdout only and stderr is irrelevant to parsing.
 - `--json` makes every command print exactly one machine-readable JSON
@@ -35,7 +38,10 @@ skill: `/plugin marketplace add ConsulTent/mcpcli`.
   error). Check the exit code before parsing. Two `jev` exceptions where a
   bad outcome is still data and exits `0`: escalated verdicts
   (`verdicts[].escalate`) and `jev check --probe --probe-on-auth-error
-  skip` after a rejected provider key (`summary.auth_skipped > 0`).
+  skip` after a rejected provider key (`summary.auth_skipped > 0`). The tus
+  twin is a within-verb asymmetry: `tus status` answers a 404 as data
+  (`exists:false`, exit `0` — landed, expired, or swept), while `tus delete`
+  of an absent upload (404/410) is a failure, exit `1`.
 - Error paths: failed one-shot runs print the error as plain text on stderr —
   stdout may be empty. The exceptions are a tool result with `isError`
   (the full JSON result still reaches stdout first, then the command exits 1)
@@ -82,6 +88,7 @@ skill: `/plugin marketplace add ConsulTent/mcpcli`.
 | `--client-secret` | | OAuth client secret / bearer token / Basic token (env `MCPCLI_CLIENT_SECRET`); flags win over env |
 | `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference); expanded and injected only when the run spawns a stdio child |
 | `--timeout` | `30s` | timeout for network operations |
+| `--insecure` | `false` | skip TLS certificate validation for HTTP connections (self-signed certs; inert for stdio); applies to MCP connections, `tus`, client-credentials discovery, and `bws`; every run of the flag prints a one-line warning to stderr in every mode; `--auth basic` + `--insecure` is rejected (drop `--insecure` or switch modes) |
 | `--json` | `false` | one JSON document on stdout, no decoration |
 | `--plain` | `false` | byte-ASCII output (no emoji/ANSI) |
 | `--trace` | `false` | per-call round-trip timing report on stderr; with `--json`, ONE trace JSON doc on stderr (`{phases, sections[].calls[]{method,rtt_ms,req_bytes,resp_bytes,err}, totals}`) — stdout stays the one result document |
@@ -164,6 +171,35 @@ mcp --url "$SRV" --auth bearer --client-secret bws://ci-token --json tools list
 mcp --command "npx -y github-mcp-server" --env GITHUB_TOKEN=bws://github-pat --json tools list
 mcp --command "npx -y @jkudish/jev-mcp" --env TYPESAFE_API_KEY=bws://jev --json jev check --probe --probe-on-auth-error skip
 ```
+
+tus file uploads — `mcp tus upload`/`status`/`delete` push files to a tus
+1.0.0 resumable-upload endpoint; the verbs take `--api-url` (the creation
+endpoint, group-persistent) and never connect to an MCP server. Chunking is
+client-side (default 64 MiB; `--chunk-size` takes k/m/g suffixes, `<= 0`
+keeps the default, a size ≥ the file disables chunking); `--metadata
+KEY=VALUE` is repeatable (values raw strings, base64'd by the client; keys
+visible ASCII without space/comma); `--resume URL` continues a staged
+upload (same host as `--api-url` only); the failure line on stderr carries
+the staged URL (once the server has one) and the last offset in every mode
+(stdout stays empty on failure):
+
+```sh
+mcp tus upload report.pdf --api-url http://localhost:8095/files/ --chunk-size 1m --json
+# {"url":"…","offset":123456,"size":123456}          # offset == size on every success
+mcp tus status http://localhost:8095/files/… --json
+# {"url":"…","exists":true,"offset":4096,"length":123456}
+# a 404 is data, exit 0: {"url":"…","exists":false,"offset":0,"length":0}
+mcp tus delete http://localhost:8095/files/… --json
+# {"url":"…","deleted":true}
+```
+
+Auth rides the full global `--auth` surface (`--auth bearer --client-secret
+bws://ref` included). Client-credentials discovery requires https or a
+loopback host (private/reserved literal-IP dials are rejected even over
+https) — against a non-loopback plain-http endpoint use bearer, or https +
+`--insecure` for self-signed certs. Exit-code asymmetry: `tus status` 404
+is data (exit 0, `exists:false`); `tus delete` of an absent upload is an
+error (exit 1).
 
 stdio servers (local tools) — pass the whole command line as one string:
 

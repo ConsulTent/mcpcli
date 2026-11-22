@@ -144,7 +144,7 @@ func newBWSLoginCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 			// Validation = one live exchange: it proves the token works and
 			// its response carries the org key material. It touches the
 			// identity server only.
-			client := bws.NewClient(normAPI, normIdentity, token, orgID)
+			client := bws.NewClient(normAPI, normIdentity, token, orgID, g.Insecure)
 			if _, err := client.Exchange(ctx); err != nil {
 				// The 401 sentinel (errors.Is, not a string match on the
 				// unioned message — its text is golden-pinned). At login the
@@ -309,7 +309,7 @@ func newBWSListCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), g.Timeout)
 			defer cancel()
 
-			client := bws.NewClient(cred.APIURL, cred.IdentityURL, cred.APIToken, cred.OrgID)
+			client := bws.NewClient(cred.APIURL, cred.IdentityURL, cred.APIToken, cred.OrgID, g.Insecure)
 			secrets, err := client.ListSecrets(ctx)
 			if err != nil {
 				return err
@@ -453,7 +453,7 @@ func newBWSGetCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), g.Timeout)
 			defer cancel()
 
-			client := bws.NewClient(cred.APIURL, cred.IdentityURL, cred.APIToken, cred.OrgID)
+			client := bws.NewClient(cred.APIURL, cred.IdentityURL, cred.APIToken, cred.OrgID, g.Insecure)
 
 			// shortcut: each NAME ref re-lists the org (GetSecretByRef's
 			// name branch), so the loop is pinned at 1-2 refs per run and

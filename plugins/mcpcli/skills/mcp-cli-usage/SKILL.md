@@ -1,6 +1,6 @@
 ---
 name: mcp-cli-usage
-description: Drive any MCP (Model Context Protocol) server from the command line with the mcp CLI — probe connectivity, list and call tools, read resources, fetch prompts, check protocol-version compatibility, manage OAuth, pull secrets from Bitwarden Secrets Manager, run headless in scripts and CI, screen patches with Jev judgment servers, and pass file-sized payloads with --in-file. Use whenever the user mentions MCP servers, MCP tools/resources/prompts, Model Context Protocol, protocol compatibility, Bitwarden Secrets Manager, bws:// secret references, or Jev/jev judgment servers.
+description: Drive any MCP (Model Context Protocol) server from the command line with the mcp CLI — probe connectivity, list and call tools, read resources, fetch prompts, check protocol-version compatibility, manage OAuth, pull secrets from Bitwarden Secrets Manager, upload files with tus resumable uploads, run headless in scripts and CI, screen patches with Jev judgment servers, and pass file-sized payloads with --in-file. Use whenever the user mentions MCP servers, MCP tools/resources/prompts, Model Context Protocol, protocol compatibility, Bitwarden Secrets Manager, bws:// secret references, tus uploads, or Jev/jev judgment servers.
 ---
 
 # Driving MCP servers with the mcp CLI
@@ -19,7 +19,9 @@ scripts and CI.
 
 - Invoke as `mcp [flags] <command>`. Exactly one of `--command` (stdio server
   to launch) or `--url` (streamable HTTP endpoint) identifies the target.
-  `auth logout` accepts either and never connects.
+  `auth logout` accepts either and never connects; the `tus` verbs take
+  `--api-url` and the `bws` verbs take their own flags — neither ever
+  connects to an MCP server.
 - Results go to stdout; decoration (progress lines, spinners) goes to stderr.
   Capture stdout only — stderr is irrelevant to parsing.
 - `--json` makes every command print exactly one machine-readable JSON
@@ -48,6 +50,7 @@ scripts and CI.
 | `--client-secret` | | OAuth client secret / bearer token / Basic token (env `MCPCLI_CLIENT_SECRET`); flags win over env |
 | `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference); expanded and injected only when the run spawns a stdio child |
 | `--timeout` | `30s` | timeout for network operations |
+| `--insecure` | `false` | skip TLS certificate validation for HTTP connections (self-signed certs; inert for stdio); applies to MCP connections, `tus`, client-credentials discovery, and `bws`; every run prints a one-line warning to stderr in every mode; `--auth basic` + `--insecure` is rejected |
 | `--json` | `false` | one JSON document on stdout, no decoration |
 | `--plain` | `false` | byte-ASCII output (no emoji/ANSI) |
 | `--trace` | `false` | per-call round-trip timing report on stderr; with `--json`, one trace JSON doc on stderr — stdout untouched |
@@ -142,6 +145,35 @@ export MCPCLI_BWS_ACCESS_TOKEN="0.00000000-0000-0000-0000-000000000000.DUMMY_SEC
 mcp bws login --org 00000000-0000-0000-0000-000000000001
 mcp bws get 00000000-0000-0000-0000-000000000002
 ```
+
+## tus file uploads (`mcp tus`)
+
+`mcp tus upload <file>` pushes a file to a tus 1.0.0 resumable-upload
+endpoint; `status <url>` reports the staged offset, `delete <url>` removes
+one. The verbs take `--api-url` (the creation endpoint) and never connect
+to an MCP server. Chunking is client-side — default 64 MiB, `--chunk-size`
+takes k/m/g suffixes (`1m`), `<= 0` keeps the default, a size ≥ the file
+disables chunking. `--resume URL` continues a staged upload (same host as
+`--api-url` only). Auth rides the full global `--auth` surface.
+
+```sh
+mcp tus upload report.pdf --api-url http://localhost:8095/files/ --chunk-size 1m --json
+# {"url":"…","offset":123456,"size":123456}          # offset == size on every success
+mcp tus status http://localhost:8095/files/… --json
+# {"url":"…","exists":true,"offset":4096,"length":123456}
+# a 404 is data, exit 0: {"url":"…","exists":false,"offset":0,"length":0}
+mcp tus delete http://localhost:8095/files/… --json
+# {"url":"…","deleted":true}
+```
+
+Failure lines on stderr carry the staged URL (once the server has one) and
+the last offset in every mode (stdout stays empty); copy the URL into
+`--resume` to continue. Client-credentials discovery requires https or a
+loopback host — against a non-loopback plain-http endpoint use
+`--auth bearer`, or https +
+`--insecure` for self-signed certs. Exit-code asymmetry: `tus status` 404
+is data (exit 0, `exists:false`); `tus delete` of an absent upload is an
+error (exit 1).
 
 ## stdio servers (local tools)
 

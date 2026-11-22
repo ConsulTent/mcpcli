@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"golang.org/x/oauth2"
 )
 
 func TestClientCredMissing(t *testing.T) {
@@ -512,4 +514,76 @@ func TestClientCredAuthorizeDiscoveryFailure(t *testing.T) {
 	if err := h.Authorize(ctx, req, resp); err == nil {
 		t.Fatal("expected Authorize error when no metadata is discoverable")
 	}
+}
+
+// TestFetchPRMContextTLSClient pins the --insecure seam on the discovery
+// chain: the oauth2.HTTPClient value in the context rides into fetchPRM's
+// transport (oauth2.NewClient(ctx, nil).Transport), so a TLS-served PRM
+// decodes; without the ctx client the same endpoint fails certificate
+// verification.
+func TestFetchPRMContextTLSClient(t *testing.T) {
+	const prmURLPath = "/.well-known/oauth-protected-resource"
+	mux := http.NewServeMux()
+	mux.HandleFunc(prmURLPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"resource":              "https://rs.example.com",
+			"authorization_servers": []string{"https://as.example.com"},
+		})
+	})
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+
+	insecure := insecureTestClient()
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, insecure)
+
+	prm, err := fetchPRM(ctx, srv.URL+prmURLPath)
+	if err != nil {
+		t.Fatalf("fetchPRM with a ctx TLS-skip client: %v", err)
+	}
+	if len(prm.AuthorizationServers) != 1 || prm.AuthorizationServers[0] != "https://as.example.com" {
+		t.Errorf("authorization_servers = %v, want [https://as.example.com]", prm.AuthorizationServers)
+	}
+
+	// Negative: without the ctx client the same fetch fails verification.
+	_, err = fetchPRM(context.Background(), srv.URL+prmURLPath)
+	if err == nil || !strings.Contains(err.Error(), "x509") {
+		t.Fatalf("fetchPRM without the ctx client = %v, want an x509 verification failure", err)
+	}
+}
+
+// TestFetchPRMRedirectNotFollowedWithCtxClient pins the guard merge: the
+// context transport is adopted WITHOUT dropping fetchPRM's strict no-redirect
+// policy — a server-controlled 302 must not carry the fetch anywhere.
+func TestFetchPRMRedirectNotFollowedWithCtxClient(t *testing.T) {
+	var targetHits atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/prm", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/target")
+		w.WriteHeader(http.StatusFound)
+	})
+	mux.HandleFunc("/target", func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"authorization_servers": []string{"https://as.example.com"}})
+	})
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, insecureTestClient())
+	_, err := fetchPRM(ctx, srv.URL+"/prm")
+	if err == nil {
+		t.Fatal("redirecting PRM = nil error, want the no-redirect failure")
+	}
+	if n := targetHits.Load(); n != 0 {
+		t.Errorf("redirect target hit %d times, want 0 (never followed)", n)
+	}
+}
+
+// insecureTestClient builds the TLS-skip client the CLI injects under
+// --insecure: a Clone of the default transport with verification off.
+func insecureTestClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig.InsecureSkipVerify = true
+	return &http.Client{Transport: tr}
 }

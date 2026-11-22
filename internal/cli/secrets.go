@@ -13,9 +13,10 @@ import (
 
 // newSecretResolver wires the builtin secret sources — the bws source today;
 // adding a manager means one new package implementing secret.Source plus one
-// registration line here.
-func newSecretResolver() (*secret.Resolver, error) {
-	return secret.New(bws.NewSource())
+// registration line here. insecure threads the global --insecure flag so
+// bws:// ref expansion honors it like every other HTTP path of the run.
+func newSecretResolver(insecure bool) (*secret.Resolver, error) {
+	return secret.New(bws.NewSource(insecure))
 }
 
 // expandSecretRefs resolves every secret reference the run consumes BEFORE
@@ -35,7 +36,7 @@ func newSecretResolver() (*secret.Resolver, error) {
 // f.ClientSecret), which then carries plaintext. Refs resolve once at
 // session open — a rotated secret needs a restart.
 func expandSecretRefs(ctx context.Context, f *GlobalFlags, errOut io.Writer) (map[string]string, error) {
-	resolver, err := newSecretResolver()
+	resolver, err := newSecretResolver(f.Insecure)
 	if err != nil {
 		return nil, err
 	}

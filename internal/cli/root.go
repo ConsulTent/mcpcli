@@ -38,6 +38,7 @@ type GlobalFlags struct {
 	Timeout      time.Duration
 	JSON         bool
 	Plain        bool
+	Insecure     bool
 	Interactive  bool
 	Trace        bool
 	Verbose      bool
@@ -144,10 +145,19 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 			if cmd.Flags().Changed("resource") && g.Auth != "client-credentials" {
 				return errors.New("--resource only applies to --auth client-credentials")
 			}
+			// basic + --insecure is rejected, not composed: basic's
+			// credential injection pins a TLS-verifying transport
+			// (http.DefaultTransport by construction), so composition
+			// machinery for a rare combo would be dead weight. The error
+			// names the remedies — the --auth-flow/--resource precedent of
+			// refusing a combination the run will not deliver.
+			if g.Insecure && g.Auth == "basic" {
+				return errors.New("--auth basic does not combine with --insecure: basic's credential injection pins a TLS-verifying transport; drop --insecure or use --auth bearer/client-credentials")
+			}
 			// --env validation and classification: the flag's one parse
 			// site. Malformed input fails on ANY command here — not
 			// silently at expansion time on connection commands only.
-			resolver, err := newSecretResolver()
+			resolver, err := newSecretResolver(g.Insecure)
 			if err != nil {
 				return err
 			}
@@ -201,6 +211,13 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 			if strings.HasPrefix(strings.ToLower(g.URL), "http://") && (g.Auth != "none" || isAuthLogin) {
 				_, _ = fmt.Fprintln(os.Stderr, "warning: --url is plain http; the credential sent to it travels unencrypted")
 			}
+			// Functional security note, not mode-gated decoration: --insecure
+			// disables TLS certificate verification for every HTTP path of
+			// this run, so every run of the flag says so on stderr — even in
+			// JSON mode, which silences decoration only.
+			if g.Insecure {
+				_, _ = fmt.Fprintln(os.Stderr, "warning: --insecure skips TLS certificate validation")
+			}
 			if _, err := auth.ProviderFor(g.Auth); err != nil {
 				return fmt.Errorf("invalid value for --auth: %w", err)
 			}
@@ -225,6 +242,7 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 	pf.DurationVar(&g.Timeout, "timeout", 30*time.Second, "timeout for network operations")
 	pf.BoolVar(&g.JSON, "json", false, "emit machine-readable JSON output")
 	pf.BoolVar(&g.Plain, "plain", false, "plain ASCII output without emoji, ANSI colors, or spinners")
+	pf.BoolVar(&g.Insecure, "insecure", false, "skip TLS certificate validation for HTTP connections (self-signed certs; inert for stdio)")
 	pf.BoolVar(&g.Trace, "trace", false, "print a per-call round-trip timing report to stderr (JSON mode: one trace document on stderr; stdout is never touched)")
 	pf.BoolVar(&g.Verbose, "verbose", false, "implies --trace and adds process boot, client-internal time, and totals to the report")
 	pf.BoolVarP(&g.Interactive, "interactive", "i", false, "start the interactive REPL")
@@ -233,7 +251,7 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 	// of opening a server session, so it imposes no connection flags.
 	// compat probes authenticate with the standard --auth flags; jev check
 	// opens its own auth-honoring session.
-	cmd.AddCommand(newAuthCommand(g), newBWSCommand(g), newInfoCommand(), newPingCommand(), newCompatCommand(), newToolsCommand(), newResourcesCommand(), newPromptsCommand(), newJevCommand())
+	cmd.AddCommand(newAuthCommand(g), newBWSCommand(g), newInfoCommand(), newPingCommand(), newCompatCommand(), newToolsCommand(), newResourcesCommand(), newPromptsCommand(), newJevCommand(), newTusCommand(g))
 
 	return cmd
 }

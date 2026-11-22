@@ -15,6 +15,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -208,7 +209,14 @@ type Client struct {
 // yields working request URLs. A normalization failure keeps the raw form
 // and the request-time URL parse fails loudly. NewClient never fails: a
 // malformed access token surfaces on first use.
-func NewClient(apiURL, identityURL, accessToken, orgID string) *Client {
+//
+// insecure skips TLS certificate verification — the global --insecure
+// flag's seam: the transport is http.DefaultTransport.(*http.Transport)
+// .Clone() with InsecureSkipVerify set. A Clone preserves the proxy
+// environment and HTTP/2 that a bare &http.Transport{} would silently drop,
+// and proxy + self-signed-MITM is exactly the --insecure demographic (the
+// internal/tus twin).
+func NewClient(apiURL, identityURL, accessToken, orgID string, insecure bool) *Client {
 	if n, err := NormalizeURL(apiURL); err == nil {
 		apiURL = n
 	}
@@ -227,6 +235,16 @@ func NewClient(apiURL, identityURL, accessToken, orgID string) *Client {
 				return http.ErrUseLastResponse
 			},
 		},
+	}
+	if insecure {
+		if def, ok := http.DefaultTransport.(*http.Transport); ok {
+			clone := def.Clone()
+			if clone.TLSClientConfig == nil {
+				clone.TLSClientConfig = &tls.Config{}
+			}
+			clone.TLSClientConfig.InsecureSkipVerify = true
+			c.http.Transport = clone
+		}
 	}
 	c.clientID, c.clientSecret, c.seed, c.tokenErr = ParseAccessToken(accessToken)
 	return c

@@ -203,6 +203,7 @@ func probeVersion(ctx context.Context, f *GlobalFlags, v string, supported []str
 		ProtocolVersion: v, // Open resolves the alias itself
 		AuthHandler:     handler,
 		Env:             env,
+		Insecure:        f.Insecure,
 		Tracer:          tracer,
 		Label:           "probe " + v,
 	})
@@ -294,6 +295,7 @@ func fetchNative(ctx context.Context, f *GlobalFlags, tracer *trace.Tracer, hand
 		ProtocolVersion: "auto", // explicitly unpinned; Open resolves the alias
 		AuthHandler:     handler,
 		Env:             env,
+		Insecure:        f.Insecure,
 		Tracer:          tracer,
 		Label:           "native",
 	})

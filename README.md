@@ -179,6 +179,9 @@ one JSON document of its result on stdout.
 | `bws logout` | Delete a cached Bitwarden instance login (offline) |
 | `bws list` | List the organization's Bitwarden secrets as decrypted-name metadata (never values) |
 | `bws get <ref>...` | Print Bitwarden secret values for bare refs (uuid or name), one `KEY=value` line per ref |
+| `tus upload <file>` | Upload a file to a tus 1.0.0 endpoint in resumable client-side chunks (`--api-url` names the creation endpoint) |
+| `tus status <url>` | Report a staged upload's offset; a 404 is data (`exists:false`, exit 0) |
+| `tus delete <url>` | Remove a staged upload via the tus termination extension |
 | `jev ask [QUESTION]` | One typed Jev question — `--opt` asks a choice, `--levels` a score, neither a noul; `--in-file` reads the question or context/evidence/priorities from files |
 | `jev verify` | Check claims against evidence (jkudish flavor); `--in-file claim=`/`evidence=` read them from files |
 | `jev screen [TEXT]` | Screen one text for prompt injection (jkudish flavor); `--in-file` reads the text or purpose from a file |
@@ -474,6 +477,111 @@ a value — registered with one line in the CLI's resolver wiring. A second
 manager (1Password, 2FAS Pass, …) is exactly that pair; duplicate schemes
 fail at construction, and unknown schemes pass through as literals.
 
+## tus file uploads (`mcp tus`)
+
+`mcp tus` uploads files to a [tus](https://tus.io) 1.0.0 resumable-upload
+endpoint and manages the staged uploads. It speaks the tus core protocol
+plus the **creation** and **termination** extensions: POST creates the
+upload, PATCH carries the bytes (the only write path), HEAD reports the
+staged offset, DELETE removes one. `upload` targets the creation endpoint
+named by the group-persistent `--api-url` (the `bws` twin — the global
+`--url` stays MCP-only); `status` and `delete` take the staged upload's URL
+as their positional argument. None of the verbs connects to an MCP server,
+so `--command`/`--url` do not apply.
+
+### The verbs
+
+```sh
+mcp tus upload report.pdf --api-url http://localhost:8095/files/ --chunk-size 1m
+mcp tus upload report.pdf --api-url https://files.example.com/files/ \
+  --metadata reviewed=true --retry 5 --json
+mcp tus upload report.pdf --api-url http://localhost:8095/files/ \
+  --resume http://localhost:8095/files/0e3f…    # continue an interrupted run
+mcp tus status http://localhost:8095/files/0e3f…
+mcp tus delete http://localhost:8095/files/0e3f…
+```
+
+- `--chunk-size` takes a byte count with an optional `k`/`m`/`g` suffix
+  (`64m`). Chunking is a client-side decision — tus defines no server chunk
+  size: the default is 64 MiB, a `<= 0` value keeps the default (one rule,
+  no special case), and a size at or above the file's size disables
+  chunking (one POST, one PATCH).
+- `--metadata KEY=VALUE` (repeatable) adds upload metadata; values are raw
+  strings, base64-encoded by the client per the tus spec. `--client`
+  (default `mcpcli`) and `--filename` (default: the file's base name) fill
+  the two conventional keys; `--metadata` pairs apply after and override
+  same-key sugar; duplicate keys: last wins. Keys must be non-empty visible
+  ASCII without spaces or commas (values may contain anything — they travel
+  base64-encoded). What metadata means is the server's policy: librarium
+  requires exactly `client` + `filename` and validates the filename against
+  its ingest registry — the allowed extensions are librarium's, see its
+  documentation.
+- `--resume URL` continues a staged upload instead of creating one. The
+  staged upload's URL rides the failure line on stderr once the server has
+  one (in every mode), so an interrupted run can be resumed by copying it
+  from the error. A resume URL on a different host than `--api-url` is
+  refused — credentials built for one host never ride to another.
+- `--retry N` (default 3) bounds retries of retry-classified PATCH
+  failures (network errors, 5xx). 4xx-class failures (401, 409, 413, …)
+  abort permanently — resending cannot recover them; a 413
+  (`tus: size exceeds the server cap`) means one chunk passed the server's
+  per-request cap (librarium's default is 100 MiB): use a smaller
+  `--chunk-size`.
+
+### Output
+
+Results go to stdout; step lines (`==> created <url>`, one
+`==> uploaded X/Y` per PATCH, `==> resuming at offset N` when resuming) go
+to stderr on the success path only — silent in `--json` mode. Human mode
+prints one final stdout line per verb —
+`uploaded <size> bytes to <url>`, `offset <n> of <len> (in staging)` or
+`no upload in staging at <url> (completed, expired, or deleted)`, and
+`deleted <url>`. In `--json` mode each verb emits exactly one document:
+
+```sh
+mcp tus upload report.pdf --api-url http://localhost:8095/files/ --json
+# {"url": "…", "offset": 123456, "size": 123456}   # offset always equals size on success
+mcp tus status http://localhost:8095/files/… --json
+# {"url": "…", "exists": true, "offset": 4096, "length": 123456}
+# {"url": "…", "exists": false, "offset": 0, "length": 0}   # a 404 is data, exit 0
+mcp tus delete http://localhost:8095/files/… --json
+# {"url": "…", "deleted": true}
+```
+
+On any failure the error text on stderr carries the file, the staged
+upload's URL (once the server has one), and the last successfully-sent
+offset in every mode; stdout stays empty and the command exits `1`. A
+credential sent to a plain-http endpoint (or an https→http redirect of the
+upload's Location) prints a one-line unencrypted-transport warning to
+stderr — a warning only, never a block.
+
+### Authentication
+
+All five `--auth` modes work on tus verbs exactly as on MCP connections:
+the global `--client-id`/`--client-secret` (including `bws://` references),
+env vars, `--auth-flow manual` for `oauth`, and `--resource` for
+`client-credentials`. librarium note: its `/files/` facade accepts the raw
+client secret as a bearer token, so
+`--auth bearer --client-secret "$LIBRARIUM_SECRET"` is the simplest mode.
+
+Constraints to know:
+
+- **Client-credentials discovery requires https or a loopback host.** The
+  SDK's discovery guard is unconditional, and it additionally rejects
+  private/reserved literal-IP dials even over https. Against a non-loopback
+  plain-http endpoint use `--auth bearer`, or serve https with a self-signed
+  certificate plus `--insecure`.
+- `--resource` overrides the RFC 8707 audience only — it helps when the
+  authorization server is reachable but the protected-resource metadata
+  yields no or incorrect resource; it never unblocks discovery itself.
+- Self-signed certificates: `--insecure` skips TLS certificate validation
+  for the upload's HTTPS connection and the discovery fetches (see
+  [Global flags](#global-flags)).
+
+Exit codes follow the global rule: `0` success, `1` failure — with one
+asymmetry: `tus status` answers a 404 as data (`exists:false`, exit 0),
+while `tus delete` of an absent upload (404/410) is a failure (exit 1).
+
 ## Jev judgment servers
 
 `mcp jev` asks typed judgment questions of a Jev server — TypeSafe's
@@ -750,11 +858,21 @@ only `exit`, `quit`, or end of input leaves it.
 | `--client-secret` | | OAuth client secret (env `MCPCLI_CLIENT_SECRET`); also the bearer token or the Basic token |
 | `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference) |
 | `--timeout` | `30s` | timeout for network operations |
+| `--insecure` | `false` | skip TLS certificate validation for HTTP connections (self-signed certs; inert for stdio) |
 | `--json` | `false` | machine-readable JSON output |
 | `--plain` | `false` | plain ASCII output, no emoji/colors/spinners |
 | `--trace` | `false` | per-call round-trip timing report on stderr (see [Round-trip timing](#round-trip-timing---trace)) |
 | `--verbose` | `false` | implies `--trace`; adds boot, client-internal time, and totals |
 | `-i`, `--interactive` | `false` | start the interactive REPL |
+
+`--insecure` applies to every HTTP path of the run: MCP connections
+(streamable HTTP), `tus` uploads, the client-credentials discovery fetches,
+and `bws` API/identity exchanges. Every run of the flag prints
+`warning: --insecure skips TLS certificate validation` to stderr —
+functional output in every mode, `--json` included. `--auth basic` does not
+combine with `--insecure` (basic's credential injection pins a
+TLS-verifying transport): such a run is rejected with the remedies named —
+drop `--insecure` or use `--auth bearer`/`client-credentials`.
 
 ## Round-trip timing (`--trace`)
 
@@ -797,7 +915,10 @@ error path.
 `0` on success, `1` on any failure (connect failure, bad input, tool `isError`, missing
 credentials, …). One exception: `jev check --probe --probe-on-auth-error skip` exits `0`
 when the provider rejects its key — the skipped battery is reported as data (see
-[Jev judgment servers](#jev-judgment-servers)).
+[Jev judgment servers](#jev-judgment-servers)). `tus` adds a within-verb asymmetry:
+`tus status` answers a 404 as data (`exists:false`, exit `0` — the upload landed,
+expired, or was swept), while `tus delete` of an absent upload (404/410) is a failure
+(exit `1`).
 
 ## Known limitations
 

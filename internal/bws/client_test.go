@@ -704,7 +704,7 @@ func TestExchangeFormAndEnvelope(t *testing.T) {
 			tok, clientID, clientSecret, _ := dummyAccessToken(t)
 			orgKey := testOrgKey(t)
 			fi := newFakeIdentity(t, form.identMount, tok, orgKey)
-			c := NewClient("https://api.invalid"+form.apiMount, fi.url, tok, "")
+			c := NewClient("https://api.invalid"+form.apiMount, fi.url, tok, "", false)
 
 			tr, err := c.Exchange(t.Context())
 			if err != nil {
@@ -743,7 +743,7 @@ func TestOrgKeyDecryptsPayload(t *testing.T) {
 	tok, _, _, _ := dummyAccessToken(t)
 	orgKey := testOrgKey(t)
 	fi := newFakeIdentity(t, "", tok, orgKey)
-	c := NewClient("https://api.invalid", fi.url, tok, "")
+	c := NewClient("https://api.invalid", fi.url, tok, "", false)
 
 	got, err := c.orgKey(t.Context())
 	if err != nil {
@@ -766,7 +766,7 @@ func TestTruncatedOrgKeyFailsClosed(t *testing.T) {
 	// The payload decrypts fine but carries only 32 bytes of key material:
 	// the length check must fire before any [:32]/[32:] slicing.
 	fi := newFakeIdentity(t, "", tok, make([]byte, 32))
-	c := NewClient("https://api.invalid", fi.url, tok, "")
+	c := NewClient("https://api.invalid", fi.url, tok, "", false)
 	_, err := c.orgKey(t.Context())
 	if err == nil {
 		t.Fatal("32-byte org key accepted")
@@ -781,7 +781,7 @@ func TestExchange401UnionedMessage(t *testing.T) {
 	orgKey := testOrgKey(t)
 	fi := newFakeIdentity(t, "", tok, orgKey)
 	fi.forceResponse(http.StatusUnauthorized, `{"error":"invalid_grant"}`)
-	c := NewClient("https://api.invalid", fi.url, tok, "")
+	c := NewClient("https://api.invalid", fi.url, tok, "", false)
 
 	_, err := c.Exchange(t.Context())
 	if err == nil {
@@ -812,7 +812,7 @@ func TestExchangeNon2xxBoundedBody(t *testing.T) {
 	fi := newFakeIdentity(t, "", tok, orgKey)
 	huge := strings.Repeat("x", 10_000)
 	fi.forceResponse(http.StatusInternalServerError, huge)
-	c := NewClient("https://api.invalid", fi.url, tok, "")
+	c := NewClient("https://api.invalid", fi.url, tok, "", false)
 
 	_, err := c.Exchange(t.Context())
 	if err == nil {
@@ -835,7 +835,7 @@ func TestExchange2xxShapeErrorWithoutBody(t *testing.T) {
 	orgKey := testOrgKey(t)
 	fi := newFakeIdentity(t, "", tok, orgKey)
 	fi.forceResponse(http.StatusOK, `oops SECRET-BODY-MARKER not json`)
-	c := NewClient("https://api.invalid", fi.url, tok, "")
+	c := NewClient("https://api.invalid", fi.url, tok, "", false)
 
 	_, err := c.Exchange(t.Context())
 	if err == nil {
@@ -855,7 +855,7 @@ func TestExchangeMissingEncryptedPayload(t *testing.T) {
 	fi.forceResponse(http.StatusOK, `{"access_token":"x"}`)
 
 	t.Run("exchange names the missing field", func(t *testing.T) {
-		c := NewClient("https://api.invalid", fi.url, tok, "")
+		c := NewClient("https://api.invalid", fi.url, tok, "", false)
 		_, err := c.Exchange(t.Context())
 		if err == nil {
 			t.Fatal("2xx envelope without encrypted_payload: nil error")
@@ -869,7 +869,7 @@ func TestExchangeMissingEncryptedPayload(t *testing.T) {
 		// The zero EncString must never reach decryptEncString, whose "has
 		// no type prefix" shape error misattributes a missing field to
 		// corruption.
-		c := NewClient("https://api.invalid", fi.url, tok, "")
+		c := NewClient("https://api.invalid", fi.url, tok, "", false)
 		_, err := c.orgKey(t.Context())
 		if err == nil {
 			t.Fatal("orgKey over an envelope without encrypted_payload: nil error")
@@ -901,7 +901,7 @@ func TestGetSecretByRef(t *testing.T) {
 			}
 			fi := newFakeIdentity(t, form.identMount, tok, orgKey)
 			fa := newFakeAPI(t, form.apiMount, orgKey, secrets)
-			c := NewClient(fa.url, fi.url, tok, orgID)
+			c := NewClient(fa.url, fi.url, tok, orgID, false)
 
 			s, err := c.GetSecretByRef(t.Context(), uuidRef)
 			if err != nil {
@@ -930,7 +930,7 @@ func TestGetSecretByRef(t *testing.T) {
 				fa2 := newFakeAPI(t, form.apiMount, orgKey, map[string]Secret{
 					denied: wireSecret(t, orgKey, Secret{ID: denied, Key: "locked", Value: "x", CanRead: false}),
 				})
-				c2 := NewClient(fa2.url, fi.url, tok, orgID)
+				c2 := NewClient(fa2.url, fi.url, tok, orgID, false)
 				_, err := c2.GetSecretByRef(t.Context(), denied)
 				if err == nil {
 					t.Fatal("CanRead=false accepted")
@@ -945,7 +945,7 @@ func TestGetSecretByRef(t *testing.T) {
 				fa2 := newFakeAPI(t, form.apiMount, orgKey, map[string]Secret{
 					empty: wireSecret(t, orgKey, Secret{ID: empty, Key: "hollow", Value: "", CanRead: true}),
 				})
-				c2 := NewClient(fa2.url, fi.url, tok, orgID)
+				c2 := NewClient(fa2.url, fi.url, tok, orgID, false)
 				_, err := c2.GetSecretByRef(t.Context(), empty)
 				if err == nil {
 					t.Fatal("empty value accepted")
@@ -960,7 +960,7 @@ func TestGetSecretByRef(t *testing.T) {
 				fa2 := newFakeAPI(t, form.apiMount, orgKey, map[string]Secret{
 					nulID: wireSecret(t, orgKey, Secret{ID: nulID, Key: "nul-key", Value: "before\x00after", CanRead: true}),
 				})
-				c2 := NewClient(fa2.url, fi.url, tok, orgID)
+				c2 := NewClient(fa2.url, fi.url, tok, orgID, false)
 				_, err := c2.GetSecretByRef(t.Context(), nulID)
 				if err == nil {
 					t.Fatal("NUL-bearing value accepted")
@@ -987,7 +987,7 @@ func TestGetSecretByName(t *testing.T) {
 		idB: wireSecret(t, orgKey, Secret{ID: idB, Key: "other", Value: "value-b", CanRead: true}),
 	})
 	fi := newFakeIdentity(t, "", tok, orgKey)
-	c := NewClient(fa.url, fi.url, tok, orgID)
+	c := NewClient(fa.url, fi.url, tok, orgID, false)
 
 	t.Run("single match", func(t *testing.T) {
 		s, err := c.GetSecretByRef(t.Context(), "jev")
@@ -1014,7 +1014,7 @@ func TestGetSecretByName(t *testing.T) {
 			idA: wireSecret(t, orgKey, Secret{ID: idA, Key: "dupe", Value: "value-a", CanRead: true}),
 			idB: wireSecret(t, orgKey, Secret{ID: idB, Key: "dupe", Value: "value-b", CanRead: true}),
 		})
-		c2 := NewClient(fa2.url, fi.url, tok, orgID)
+		c2 := NewClient(fa2.url, fi.url, tok, orgID, false)
 		_, err := c2.GetSecretByRef(t.Context(), "dupe")
 		if err == nil {
 			t.Fatal("multiple matches: nil error")
@@ -1025,7 +1025,7 @@ func TestGetSecretByName(t *testing.T) {
 	})
 
 	t.Run("missing org id fails closed pre-URL", func(t *testing.T) {
-		c2 := NewClient(fa.url, fi.url, tok, "")
+		c2 := NewClient(fa.url, fi.url, tok, "", false)
 		_, err := c2.GetSecretByRef(t.Context(), "jev")
 		if err == nil {
 			t.Fatal("name ref without org id: nil error")
@@ -1047,7 +1047,7 @@ func TestListSecrets(t *testing.T) {
 		idB: wireSecret(t, orgKey, Secret{ID: idB, OrganizationID: orgID, Key: "testsecret", Value: "v", CanRead: true, CanWrite: true}),
 	})
 	fi := newFakeIdentity(t, "", tok, orgKey)
-	c := NewClient(fa.url, fi.url, tok, orgID)
+	c := NewClient(fa.url, fi.url, tok, orgID, false)
 
 	items, err := c.ListSecrets(t.Context())
 	if err != nil {
@@ -1137,7 +1137,7 @@ func TestSecretProjectsWireShape(t *testing.T) {
 		}))
 		t.Cleanup(srv.Close)
 		fi := newFakeIdentity(t, "", tok, orgKey)
-		return NewClient(srv.URL, fi.url, tok, orgID)
+		return NewClient(srv.URL, fi.url, tok, orgID, false)
 	}
 
 	t.Run("list decodes object projects", func(t *testing.T) {
@@ -1182,7 +1182,7 @@ func TestSecretProjectsWireShape(t *testing.T) {
 		}))
 		t.Cleanup(srv.Close)
 		fi := newFakeIdentity(t, "", tok, orgKey)
-		c := NewClient(srv.URL, fi.url, tok, orgID)
+		c := NewClient(srv.URL, fi.url, tok, orgID, false)
 		if _, err := c.ListSecrets(t.Context()); err != nil {
 			t.Fatalf("ListSecrets without a projects key: %v", err)
 		}
@@ -1207,7 +1207,7 @@ func TestSecretProjectsWireShape(t *testing.T) {
 		}))
 		t.Cleanup(srv.Close)
 		fi := newFakeIdentity(t, "", tok, orgKey)
-		c := NewClient(srv.URL, fi.url, tok, orgID)
+		c := NewClient(srv.URL, fi.url, tok, orgID, false)
 		if _, err := c.ListSecrets(t.Context()); err != nil {
 			t.Fatalf("ListSecrets with empty projects: %v", err)
 		}
@@ -1226,7 +1226,7 @@ func TestUpdateSecret(t *testing.T) {
 		id: wireSecret(t, orgKey, Secret{ID: id, OrganizationID: orgID, Key: "testsecret", Value: "old", CanRead: true, CanWrite: true}),
 	})
 	fi := newFakeIdentity(t, "", tok, orgKey)
-	c := NewClient(fa.url, fi.url, tok, orgID)
+	c := NewClient(fa.url, fi.url, tok, orgID, false)
 
 	err := c.UpdateSecret(t.Context(), SecretUpdateRequest{
 		ID:             id,
@@ -1292,10 +1292,10 @@ func TestClientErrorsNeverLeakSecrets(t *testing.T) {
 	orgKey := testOrgKey(t)
 	fi := newFakeIdentity(t, "", tok, orgKey)
 	fi.forceResponse(http.StatusInternalServerError, "boom")
-	c := NewClient("https://api.invalid", fi.url, tok, "01234567-89ab-cdef-0123-456789abcdef")
+	c := NewClient("https://api.invalid", fi.url, tok, "01234567-89ab-cdef-0123-456789abcdef", false)
 
 	_, exchangeErr := c.Exchange(t.Context())
-	c2 := NewClient("https://api.invalid", fi.url, tok, "01234567-89ab-cdef-0123-456789abcdef")
+	c2 := NewClient("https://api.invalid", fi.url, tok, "01234567-89ab-cdef-0123-456789abcdef", false)
 	_, keyErr := c2.orgKey(t.Context())
 
 	for _, err := range []error{exchangeErr, keyErr} {

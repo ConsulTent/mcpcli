@@ -9,7 +9,7 @@ import (
 
 // TestSourceScheme pins the Source's registration contract.
 func TestSourceScheme(t *testing.T) {
-	if got := (NewSource()).Scheme(); got != "bws" {
+	if got := (NewSource(false)).Scheme(); got != "bws" {
 		t.Errorf("Scheme() = %q, want %q", got, "bws")
 	}
 }
@@ -41,7 +41,7 @@ func TestSourceResolveThroughResolver(t *testing.T) {
 				t.Fatalf("SaveCredential: %v", err)
 			}
 
-			res, err := secret.New(NewSource())
+			res, err := secret.New(NewSource(false))
 			if err != nil {
 				t.Fatalf("secret.New: %v", err)
 			}
@@ -104,7 +104,7 @@ func TestSourceResolveExchange401(t *testing.T) {
 		t.Fatalf("SaveCredential: %v", err)
 	}
 
-	res, err := secret.New(NewSource())
+	res, err := secret.New(NewSource(false))
 	if err != nil {
 		t.Fatalf("secret.New: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestSourceResolveExchange401(t *testing.T) {
 // expansion before any network call.
 func TestSourceResolveUncachedFailsClosed(t *testing.T) {
 	useTempTokenDir(t)
-	res, err := secret.New(NewSource())
+	res, err := secret.New(NewSource(false))
 	if err != nil {
 		t.Fatalf("secret.New: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestSourceResolveMissingOrgID(t *testing.T) {
 	if err := SaveCredential(Credential{APIToken: tok, APIURL: fa.url, IdentityURL: fi.url}); err != nil {
 		t.Fatalf("SaveCredential: %v", err)
 	}
-	res, err := secret.New(NewSource())
+	res, err := secret.New(NewSource(false))
 	if err != nil {
 		t.Fatalf("secret.New: %v", err)
 	}
