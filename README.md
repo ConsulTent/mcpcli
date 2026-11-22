@@ -322,10 +322,13 @@ line; prefer the MCPCLI_BWS_ACCESS_TOKEN environment variable`. A value that
 is itself a `bws://` reference (any letter case) never reaches argv as
 plaintext and stays silent; an empty `--env` value stays silent too.
 
-A credential sent to a plain-http `--url` also warns: the token travels
-unencrypted (`warning: --url is plain http; the credential sent to it
-travels unencrypted`, any `--auth` mode beyond `none` or the `auth login`
-exchange; loopback/self-hosted http remains a deliberate supported trade).
+A credential is never sent over plain http: a plain-http `--url` with any
+`--auth` mode beyond `none` (or the `auth login` exchange) fails before
+connecting with `--url is plain http; the credential sent to it travels
+unencrypted — use https, or --insecure with a localhost/127.0.0.1 endpoint`.
+The only http allowance is a loopback host (localhost, 127.0.0.1, ::1) with
+`--insecure`, which warns and proceeds; non-loopback http is forbidden even
+with `--insecure`.
 
 The `oauth` flow itself needs no credentials — it falls back to dynamic client
 registration.
@@ -551,9 +554,10 @@ mcp tus delete http://localhost:8095/files/… --json
 On any failure the error text on stderr carries the file, the staged
 upload's URL (once the server has one), and the last successfully-sent
 offset in every mode; stdout stays empty and the command exits `1`. A
-credential sent to a plain-http endpoint (or an https→http redirect of the
-upload's Location) prints a one-line unencrypted-transport warning to
-stderr — a warning only, never a block.
+credential never travels plain http here either: a plain-http endpoint (or
+an https→http redirect of the upload's Location) fails before the wire
+with the gate error, unless the target is loopback and `--insecure` is set
+(which warns and proceeds).
 
 ### Authentication
 
@@ -568,9 +572,9 @@ Constraints to know:
 
 - **Client-credentials discovery requires https or a loopback host.** The
   SDK's discovery guard is unconditional, and it additionally rejects
-  private/reserved literal-IP dials even over https. Against a non-loopback
-  plain-http endpoint use `--auth bearer`, or serve https with a self-signed
-  certificate plus `--insecure`.
+  private/reserved literal-IP dials even over https. A non-loopback
+  plain-http endpoint accepts no credentials at all — serve https (a
+  self-signed certificate plus `--insecure` works).
 - `--resource` overrides the RFC 8707 audience only — it helps when the
   authorization server is reachable but the protected-resource metadata
   yields no or incorrect resource; it never unblocks discovery itself.
@@ -854,7 +858,7 @@ only `exit`, `quit`, or end of input leaves it.
 | `--client-secret` | | OAuth client secret (env `MCPCLI_CLIENT_SECRET`); also the bearer token or the Basic token |
 | `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference) |
 | `--timeout` | `30s` | timeout for network operations |
-| `--insecure` | `false` | skip TLS certificate validation for HTTP connections (self-signed certs; inert for stdio) |
+| `--insecure` | `false` | skip TLS certificate validation (self-signed certs, any host) and allow credentials over plain http on localhost/127.0.0.1/::1 only; inert for stdio |
 | `--json` | `false` | machine-readable JSON output |
 | `--plain` | `false` | plain ASCII output, no emoji/colors/spinners |
 | `--trace` | `false` | per-call round-trip timing report on stderr (see [Round-trip timing](#round-trip-timing---trace)) |
@@ -868,7 +872,11 @@ and `bws` API/identity exchanges. Every run of the flag prints
 functional output in every mode, `--json` included. `--auth basic` does not
 combine with `--insecure` (basic's credential injection pins a
 TLS-verifying transport): such a run is rejected with the remedies named —
-drop `--insecure` or use `--auth bearer`/`client-credentials`.
+drop `--insecure` or use `--auth bearer`/`client-credentials`. The flag is
+also the only way to send a credential over plain http, and then only to a
+loopback host (localhost, 127.0.0.1, ::1): any other plain-http target with
+authentication fails before connecting — credentials never travel
+non-loopback plaintext, `--insecure` or not.
 
 ## Round-trip timing (`--trace`)
 
