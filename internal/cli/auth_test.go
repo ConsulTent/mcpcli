@@ -169,17 +169,20 @@ func TestAuthLoginSavesToken(t *testing.T) {
 		t.Errorf("MCP endpoint never received an authorized request")
 	}
 
-	// A second login in JSON mode reuses the cached token: silent stderr, no
-	// second token exchange, no re-authorization. The one admitted stderr
-	// line is the unconditional --insecure warning — the loopback http
-	// target needs the flag under the plain-http credential gate.
+	// A second login in JSON mode reuses the cached token: no second token
+	// exchange, no re-authorization, and the captured stderr stays silent.
+	// The loopback http target needs --insecure under the plain-http
+	// credential gate; its warning rides os.Stderr (see below).
 	authedBefore := authedHits.Load()
 	stderr, err = runAuthCommand(nil, "auth", "login", "--url", target+"/mcp", "--json", "--insecure", "--timeout", "30s")
 	if err != nil {
 		t.Fatalf("second auth login (JSON): %v", err)
 	}
-	if stderr != "" && !strings.Contains(stderr, "warning: --insecure skips TLS certificate validation") {
-		t.Errorf("JSON-mode login wrote %q to stderr, want silence or only the --insecure warning", stderr)
+	// The captured cobra buffer must stay empty: the --insecure warning is a
+	// raw os.Stderr Fprintln (captureOSStderr territory), so JSON-mode purity
+	// here means buffer silence — the warning never reaches this stream.
+	if stderr != "" {
+		t.Errorf("JSON-mode login wrote %q to stderr, want silence (the --insecure warning rides os.Stderr)", stderr)
 	}
 	if n := tokenHits.Load(); n != 1 {
 		t.Errorf("token endpoint hit %d times after cached-token login, want 1", n)
