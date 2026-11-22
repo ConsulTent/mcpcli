@@ -146,7 +146,10 @@ func TestEnvNULRefGolden(t *testing.T) {
 		t.Fatalf("SaveCredential: %v", err)
 	}
 
-	_, _, _, err := runRoot(t, "--env", "K=bws://"+nulRef, "--command", "some-server", "ping")
+	// --insecure: the fake BWS identity serves plain http on a loopback host
+	// (the plain-http credential gate's one allowance) so the run reaches the
+	// NUL guard — the thing under test.
+	_, _, _, err := runRoot(t, "--insecure", "--env", "K=bws://"+nulRef, "--command", "some-server", "ping")
 	if err == nil {
 		t.Fatal("NUL-bearing secret ref accepted")
 	}
@@ -178,7 +181,10 @@ func TestClientSecretNULRefGolden(t *testing.T) {
 		t.Fatalf("SaveCredential: %v", err)
 	}
 
-	_, _, _, err := runRoot(t, "--url", "https://example.invalid/mcp", "--auth", "bearer",
+	// --insecure: the fake BWS identity serves plain http on a loopback host
+	// (the plain-http credential gate's one allowance) so the run reaches the
+	// NUL guard — the thing under test.
+	_, _, _, err := runRoot(t, "--url", "https://example.invalid/mcp", "--auth", "bearer", "--insecure",
 		"--client-secret", "bws://"+nulRef, "ping")
 	if err == nil {
 		t.Fatal("NUL-bearing secret ref accepted as the client secret")
@@ -231,7 +237,9 @@ func TestJevCheckInjectsEnv(t *testing.T) {
 	t.Setenv("JEV_HELPER_SECRET", "inherited")
 
 	uuidRef := "11111111-2222-3333-4444-555555555555"
-	stdout, stderr, _, err := runRoot(t,
+	// --insecure: the fake BWS identity serves plain http on a loopback host
+	// (the plain-http credential gate's one allowance).
+	stdout, stderr, _, err := runRoot(t, "--insecure",
 		"--command", shellquote.Join(exe, "-test.run=TestHelperProcessJevEnv"),
 		"--env", "JEV_HELPER_SECRET=bws://"+uuidRef,
 		"--json", "jev", "check")
@@ -259,8 +267,11 @@ func TestAuthLoginExpandsClientSecretRef(t *testing.T) {
 
 	t.Setenv("MCPCLI_CLIENT_ID", "test-client-id")
 	uuidRef := "11111111-2222-3333-4444-555555555555"
+	// --insecure: every plain-http surface of the run (the http IdP fake and
+	// the bws identity exchange) sits on loopback hosts — the plain-http
+	// credential gate's one allowance.
 	stderr, err := runAuthCommand(strings.NewReader(code+"\n"),
-		"auth", "login", "--url", target+"/mcp", "--auth-flow", "manual",
+		"auth", "login", "--url", target+"/mcp", "--auth-flow", "manual", "--insecure",
 		"--client-secret", "bws://"+uuidRef, "--timeout", "30s")
 	if err != nil {
 		t.Fatalf("auth login with a bws:// client secret: %v\nstderr: %s", err, stderr)

@@ -51,7 +51,7 @@ scripts and CI.
 | `--client-secret` | | OAuth client secret / bearer token / Basic token (env `MCPCLI_CLIENT_SECRET`); flags win over env |
 | `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference); expanded and injected only when the run spawns a stdio child |
 | `--timeout` | `30s` | timeout for network operations |
-| `--insecure` | `false` | skip TLS certificate validation for HTTP connections (self-signed certs; inert for stdio); applies to MCP connections, `tus`, client-credentials discovery, and `bws`; every run prints a one-line warning to stderr in every mode; `--auth basic` + `--insecure` is rejected |
+| `--insecure` | `false` | skip TLS certificate validation (self-signed certs, any host) and allow credentials over plain http on localhost/127.0.0.1/::1 ONLY — any other plain-http target with auth fails before connecting; applies to MCP connections, `tus`, client-credentials discovery, and `bws`; every run prints a one-line warning to stderr in every mode; `--auth basic` + `--insecure` is rejected |
 | `--json` | `false` | one JSON document on stdout, no decoration |
 | `--plain` | `false` | byte-ASCII output (no emoji/ANSI) |
 | `--trace` | `false` | per-call round-trip timing report on stderr; with `--json`, one trace JSON doc on stderr — stdout untouched |
@@ -173,9 +173,9 @@ mcp tus delete http://localhost:8095/files/… --json
 Failure lines on stderr carry the staged URL (once the server has one) and
 the last offset in every mode (stdout stays empty); copy the URL into
 `--resume` to continue. Client-credentials discovery requires https or a
-loopback host — against a non-loopback plain-http endpoint use
-`--auth bearer`, or https +
-`--insecure` for self-signed certs. Exit-code asymmetry: `tus status` 404
+loopback host; no credential travels plain http outside localhost/127.0.0.1/::1
+with `--insecure` — a non-loopback plain-http endpoint accepts no auth (serve
+https; self-signed + `--insecure` works). Exit-code asymmetry: `tus status` 404
 is data (exit 0, `exists:false`); `tus delete` of an absent upload is an
 error (exit 1).
 

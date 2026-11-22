@@ -140,9 +140,11 @@ func TestAuthLoginSavesToken(t *testing.T) {
 	t.Setenv("MCPCLI_CLIENT_SECRET", "dummy-secret")
 
 	// Manual flow with a scripted paste: no browser, no network beyond the
-	// loopback test servers.
+	// loopback test servers. --insecure: the fake IdP serves plain http on a
+	// loopback host, and the login exchange trips the plain-http credential
+	// gate without the loopback opt-in.
 	stderr, err := runAuthCommand(strings.NewReader(code+"\n"),
-		"auth", "login", "--url", target+"/mcp", "--auth-flow", "manual", "--timeout", "30s")
+		"auth", "login", "--url", target+"/mcp", "--auth-flow", "manual", "--insecure", "--timeout", "30s")
 	if err != nil {
 		t.Fatalf("auth login: %v", err)
 	}
@@ -167,15 +169,20 @@ func TestAuthLoginSavesToken(t *testing.T) {
 		t.Errorf("MCP endpoint never received an authorized request")
 	}
 
-	// A second login in JSON mode reuses the cached token: silent stderr, no
-	// second token exchange, no re-authorization.
+	// A second login in JSON mode reuses the cached token: no second token
+	// exchange, no re-authorization, and the captured stderr stays silent.
+	// The loopback http target needs --insecure under the plain-http
+	// credential gate; its warning rides os.Stderr (see below).
 	authedBefore := authedHits.Load()
-	stderr, err = runAuthCommand(nil, "auth", "login", "--url", target+"/mcp", "--json", "--timeout", "30s")
+	stderr, err = runAuthCommand(nil, "auth", "login", "--url", target+"/mcp", "--json", "--insecure", "--timeout", "30s")
 	if err != nil {
 		t.Fatalf("second auth login (JSON): %v", err)
 	}
+	// The captured cobra buffer must stay empty: the --insecure warning is a
+	// raw os.Stderr Fprintln (captureOSStderr territory), so JSON-mode purity
+	// here means buffer silence — the warning never reaches this stream.
 	if stderr != "" {
-		t.Errorf("JSON-mode login wrote %q to stderr, want silence", stderr)
+		t.Errorf("JSON-mode login wrote %q to stderr, want silence (the --insecure warning rides os.Stderr)", stderr)
 	}
 	if n := tokenHits.Load(); n != 1 {
 		t.Errorf("token endpoint hit %d times after cached-token login, want 1", n)

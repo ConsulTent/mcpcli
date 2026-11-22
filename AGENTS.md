@@ -90,7 +90,7 @@ skill: `/plugin marketplace add ConsulTent/mcpcli`.
 | `--client-secret` | | OAuth client secret / bearer token / Basic token (env `MCPCLI_CLIENT_SECRET`); flags win over env |
 | `--env` | | environment variable for stdio servers as `KEY=VALUE` (repeatable; `VALUE` may be a `bws://` secret reference); expanded and injected only when the run spawns a stdio child |
 | `--timeout` | `30s` | timeout for network operations |
-| `--insecure` | `false` | skip TLS certificate validation for HTTP connections (self-signed certs; inert for stdio); applies to MCP connections, `tus`, client-credentials discovery, and `bws`; every run of the flag prints a one-line warning to stderr in every mode; `--auth basic` + `--insecure` is rejected (drop `--insecure` or switch modes) |
+| `--insecure` | `false` | skip TLS certificate validation (self-signed certs, any host) and allow credentials over plain http on localhost/127.0.0.1/::1 ONLY — every other plain-http target with auth fails before connecting (credentials never travel non-loopback plaintext); applies to MCP connections, `tus`, client-credentials discovery, and `bws`; every run of the flag prints a one-line warning to stderr in every mode; `--auth basic` + `--insecure` is rejected (drop `--insecure` or switch modes) |
 | `--json` | `false` | one JSON document on stdout, no decoration |
 | `--plain` | `false` | byte-ASCII output (no emoji/ANSI) |
 | `--trace` | `false` | per-call round-trip timing report on stderr; with `--json`, ONE trace JSON doc on stderr (`{phases, sections[].calls[]{method,rtt_ms,req_bytes,resp_bytes,err}, totals}`) — stdout stays the one result document |
@@ -201,8 +201,9 @@ mcp tus delete http://localhost:8095/files/… --json
 Auth rides the full global `--auth` surface (`--auth bearer --client-secret
 bws://ref` included). Client-credentials discovery requires https or a
 loopback host (private/reserved literal-IP dials are rejected even over
-https) — against a non-loopback plain-http endpoint use bearer, or https +
-`--insecure` for self-signed certs.
+https). No credential travels plain http outside localhost/127.0.0.1/::1
+with `--insecure` — a non-loopback plain-http endpoint accepts no auth at
+all; serve https (self-signed + `--insecure` works).
 
 stdio servers (local tools) — pass the whole command line as one string:
 

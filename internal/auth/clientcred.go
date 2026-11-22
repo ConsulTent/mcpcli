@@ -264,7 +264,7 @@ func checkPRMURL(addr string) error {
 	if err != nil {
 		return err
 	}
-	if !isLoopbackHost(u.Host) && u.Scheme != "https" {
+	if !IsLoopbackHost(u.Host) && u.Scheme != "https" {
 		return fmt.Errorf("URL %q does not use HTTPS or is not a loopback address", addr)
 	}
 	if ip, err := netip.ParseAddr(u.Hostname()); err == nil && isPrivateOrReservedIP(ip) {
@@ -273,9 +273,15 @@ func checkPRMURL(addr string) error {
 	return nil
 }
 
-// isLoopbackHost reports whether a URL host (host or host:port) is the
-// literal "localhost" or a loopback IP.
-func isLoopbackHost(addr string) bool {
+// IsLoopbackHost reports whether a URL host (a bare host or a host:port) is
+// the literal "localhost" or a loopback IP (127.0.0.0/8, ::1) — a literal
+// string/IP test only, no name resolution. It is the shared predicate for
+// transport-policy gates that allow plain http on loopback hosts only (the
+// CLI's plain-http credential gate, the tus and bws wire boundaries), which
+// is why it is exported: those packages have no other way to reach it, and
+// duplicating the parse would fork the allowance. It also serves this
+// package's SSRF check on the PRM fetch URL.
+func IsLoopbackHost(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		// SplitHostPort fails on a bare host without a port.

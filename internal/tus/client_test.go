@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -858,7 +857,7 @@ func TestDoAuthorizeRetryOnce(t *testing.T) {
 			ft := newFakeTus(t, false)
 			ft.queuePost(fakeFault{status: status})
 			h := &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: dummyToken(), TokenType: "Bearer"})}
-			c := NewClient(ft.endpoint(), h, nil, false)
+			c := NewClient(ft.endpoint(), h, nil, true)
 
 			got, err := c.Create(context.Background(), 1, nil)
 			if err != nil {
@@ -885,7 +884,7 @@ func TestDoAuthorizeRetryOnce(t *testing.T) {
 		ft.seed(true, 0, 100)
 		ft.queuePatch(fakeFault{status: http.StatusUnauthorized})
 		h := &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: dummyToken(), TokenType: "Bearer"})}
-		c := NewClient(ft.endpoint(), h, nil, false)
+		c := NewClient(ft.endpoint(), h, nil, true)
 
 		chunk := patternBytes(8)
 		got, err := c.Patch(context.Background(), ft.uploadURL(), 0, bytes.NewReader(chunk), int64(len(chunk)))
@@ -918,7 +917,7 @@ func TestDoAuthorizeErrorNoRetry(t *testing.T) {
 	ft := newFakeTus(t, false)
 	ft.queuePost(fakeFault{status: http.StatusUnauthorized})
 	h := &fakeHandler{authorizeErr: errors.New("deny")}
-	c := NewClient(ft.endpoint(), h, nil, false)
+	c := NewClient(ft.endpoint(), h, nil, true)
 
 	_, err := c.Create(context.Background(), 1, nil)
 	if err == nil {
@@ -940,7 +939,7 @@ func TestDoAuthorizeErrorNoRetry(t *testing.T) {
 func TestDoTokenSourceErrorZeroRequests(t *testing.T) {
 	ft := newFakeTus(t, false)
 	h := &fakeHandler{tsErr: errors.New("token source failed")}
-	c := NewClient(ft.endpoint(), h, nil, false)
+	c := NewClient(ft.endpoint(), h, nil, true)
 
 	_, err := c.Create(context.Background(), 1, nil)
 	if err == nil {
@@ -962,7 +961,7 @@ func TestDoTokenSourceErrorZeroRequests(t *testing.T) {
 func TestDoTokenFetchErrorAborts(t *testing.T) {
 	ft := newFakeTus(t, false)
 	h := &fakeHandler{tokenErr: errors.New("token fetch failed")}
-	c := NewClient(ft.endpoint(), h, nil, false)
+	c := NewClient(ft.endpoint(), h, nil, true)
 
 	_, err := c.Create(context.Background(), 1, nil)
 	if err == nil {
@@ -985,7 +984,7 @@ func TestInvalidGrantProceedsHeaderless(t *testing.T) {
 	ft := newFakeTus(t, false)
 	ft.queuePost(fakeFault{status: http.StatusUnauthorized})
 	h := &fakeHandler{tokenErr: &oauth2.RetrieveError{ErrorCode: "invalid_grant"}}
-	c := NewClient(ft.endpoint(), h, nil, false)
+	c := NewClient(ft.endpoint(), h, nil, true)
 
 	got, err := c.Create(context.Background(), 1, nil)
 	if err != nil {
@@ -1010,7 +1009,7 @@ func TestInvalidGrantProceedsHeaderless(t *testing.T) {
 func TestBearerInjection(t *testing.T) {
 	ft := newFakeTus(t, false)
 	h := &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: dummyToken(), TokenType: "Bearer"})}
-	c := NewClient(ft.endpoint(), h, nil, false)
+	c := NewClient(ft.endpoint(), h, nil, true)
 
 	if _, err := c.Create(context.Background(), 1, nil); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -1021,6 +1020,12 @@ func TestBearerInjection(t *testing.T) {
 	}
 }
 
+// TestBasicModeTransportHTTPClient pins basic mode's fate at the tus wire
+// boundary under the plain-http credential gate: the Basic credential rides
+// the base round tripper, which serves only with insecure=false — and the
+// CLI rejects --auth basic + --insecure outright — so basic over plain http
+// is now refused pre-wire like every other credential. The header-injection
+// scoping itself stays pinned in internal/auth (TestTransportHTTPClientScopesHeader).
 func TestBasicModeTransportHTTPClient(t *testing.T) {
 	ft := newFakeTus(t, false)
 	auth.RegisterBuiltins()
@@ -1042,13 +1047,14 @@ func TestBasicModeTransportHTTPClient(t *testing.T) {
 	}
 	c := NewClient(ft.endpoint(), handler, bc.TransportHTTPClient().Transport, false)
 
-	if _, err := c.Create(context.Background(), 1, nil); err != nil {
-		t.Fatalf("Create: %v", err)
+	_, err = c.Create(context.Background(), 1, nil)
+	want := fmt.Sprintf("tus: the request to %s is plain http; the credential sent to it travels unencrypted — use https, or --insecure with a localhost/127.0.0.1 endpoint", ft.endpoint())
+	if err == nil || err.Error() != want {
+		t.Fatalf("Create over plain http with basic = %v, want byte-exact %q", err, want)
 	}
-	want := "Basic " + base64.StdEncoding.EncodeToString([]byte(du+":"+dp))
-	cap := ft.lastPost()
-	if v := cap.header.Get("Authorization"); v != want {
-		t.Fatalf("POST Authorization = %q, want %q", v, want)
+	posts, _, _, _ := ft.counts()
+	if posts != 0 {
+		t.Fatalf("posts = %d, want 0 (refused before any wire bytes)", posts)
 	}
 }
 
@@ -1496,6 +1502,96 @@ func TestUploadTLSRejectedWithoutInsecure(t *testing.T) {
 	if !errors.As(err, &certErr) {
 		t.Fatalf("Upload error = %v, want errors.As *tls.CertificateVerificationError", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// plain-http credential gate (the wire boundary of "a credential never
+// travels plain http": http + a non-nil handler is refused in send() unless
+// the host is literal loopback AND insecure was opted in)
+// ---------------------------------------------------------------------------
+
+// TestPlainHTTPCredentialGate pins the send()-level gate: an http endpoint
+// plus a credential-bearing handler is refused byte-exact with ZERO wire
+// bytes; loopback + insecure proceeds with the bearer riding; an https
+// endpoint whose 201 Location downgrades the upload to a non-loopback http
+// URL is refused at the first PATCH; and the tusSameHostGuard scheme hole
+// (an https endpoint plus an http resume URL on the SAME host — the guard
+// compares hosts only) is closed by the same send() check.
+func TestPlainHTTPCredentialGate(t *testing.T) {
+	bearer := func() *fakeHandler {
+		return &fakeHandler{ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: dummyToken(), TokenType: "Bearer"})}
+	}
+
+	t.Run("http endpoint with handler refused pre-wire", func(t *testing.T) {
+		ft := newFakeTus(t, false)
+		c := NewClient(ft.endpoint(), bearer(), nil, false)
+
+		_, err := c.Create(context.Background(), 1, nil)
+		want := fmt.Sprintf("tus: the request to %s is plain http; the credential sent to it travels unencrypted — use https, or --insecure with a localhost/127.0.0.1 endpoint", ft.endpoint())
+		if err == nil || err.Error() != want {
+			t.Fatalf("Create error = %v, want byte-exact %q", err, want)
+		}
+		posts, heads, patches, deletes := ft.counts()
+		if posts != 0 || heads != 0 || patches != 0 || deletes != 0 {
+			t.Fatalf("fake saw posts=%d heads=%d patches=%d deletes=%d, want all 0 (zero wire bytes)", posts, heads, patches, deletes)
+		}
+	})
+
+	t.Run("loopback http with handler and insecure proceeds", func(t *testing.T) {
+		ft := newFakeTus(t, false)
+		c := NewClient(ft.endpoint(), bearer(), nil, true)
+
+		got, err := c.Create(context.Background(), 1, nil)
+		if err != nil {
+			t.Fatalf("Create with loopback+insecure: %v", err)
+		}
+		if got != ft.uploadURL() {
+			t.Fatalf("Create URL = %q, want %q", got, ft.uploadURL())
+		}
+		if v := ft.lastPost().header.Get("Authorization"); v != "Bearer "+dummyToken() {
+			t.Fatalf("POST Authorization = %q, want the bearer", v)
+		}
+	})
+
+	t.Run("https Location downgraded to non-loopback http refused at PATCH", func(t *testing.T) {
+		ft := newFakeTus(t, true) // https endpoint
+		ft.queuePost(fakeFault{status: http.StatusCreated, location: "http://attacker.example.com/files/abc123"})
+		c := NewClient(ft.endpoint(), bearer(), nil, true) // insecure: the TLS fake's self-signed cert
+
+		url, err := c.Create(context.Background(), 10, nil)
+		if err != nil {
+			t.Fatalf("Create over https with a downgrading Location: %v", err)
+		}
+		if url != "http://attacker.example.com/files/abc123" {
+			t.Fatalf("Create URL = %q, want the redirected Location", url)
+		}
+		_, err = c.Patch(context.Background(), url, 0, bytes.NewReader(patternBytes(8)), 8)
+		want := "tus: the request to http://attacker.example.com/files/abc123 is plain http; the credential sent to it travels unencrypted — use https, or --insecure with a localhost/127.0.0.1 endpoint"
+		if err == nil || err.Error() != want {
+			t.Fatalf("PATCH error = %v, want byte-exact %q", err, want)
+		}
+		posts, _, patches, _ := ft.counts()
+		if posts != 1 || patches != 0 {
+			t.Fatalf("fake saw posts=%d patches=%d, want 1/0 (the PATCH never fired)", posts, patches)
+		}
+	})
+
+	t.Run("https endpoint plus http resume URL on the same host refused", func(t *testing.T) {
+		ft := newFakeTus(t, true) // https endpoint
+		resume := strings.Replace(ft.uploadURL(), "https://", "http://", 1)
+		c := NewClient(ft.endpoint(), bearer(), nil, false)
+		f := tempFile(t, patternBytes(16))
+
+		_, err := c.Upload(context.Background(), f, 16, nil, 8, resume, 0, nil)
+		want := fmt.Sprintf("tus: the request to %s is plain http; the credential sent to it travels unencrypted — use https, or --insecure with a localhost/127.0.0.1 endpoint", resume)
+		if err == nil || err.Error() != want {
+			t.Fatalf("Upload resume error = %v, want byte-exact %q", err, want)
+		}
+		posts, heads, patches, deletes := ft.counts()
+		if posts != 0 || heads != 0 || patches != 0 || deletes != 0 {
+			t.Fatalf("fake saw posts=%d heads=%d patches=%d deletes=%d, want all 0 (zero wire bytes)", posts, heads, patches, deletes)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

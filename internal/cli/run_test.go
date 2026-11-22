@@ -241,7 +241,10 @@ func TestBearerRefFlowE2E(t *testing.T) {
 	}))
 	t.Cleanup(httpSrv.Close)
 
-	stdout, stderr, _, err := runRoot(t, "--url", httpSrv.URL, "--auth", "bearer",
+	// --insecure: every HTTP surface of this run (the MCP endpoint, the bws
+	// identity exchange, the API fake) is plain http on a loopback host —
+	// the plain-http credential gate's one allowance.
+	stdout, stderr, _, err := runRoot(t, "--url", httpSrv.URL, "--auth", "bearer", "--insecure",
 		"--client-secret", "bws://"+uuidRef, "ping")
 	if err != nil {
 		t.Fatalf("ping with a bws:// bearer ref: %v\nstderr: %s", err, stderr)
