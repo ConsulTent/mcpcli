@@ -178,6 +178,12 @@ type Client struct {
 	base     http.RoundTripper
 	insecure bool
 	http     *http.Client
+
+	// Warn is the functional security note channel, not decoration: when an
+	// https endpoint's 201 Location redirects the upload to plain http, one
+	// line lands here before any PATCH is sent (the credential would travel
+	// unencrypted). Zero value nil stays silent — a nil-guarded write.
+	Warn io.Writer
 }
 
 // NewClient builds a Client for one tus endpoint. Like bws.NewClient it
@@ -381,7 +387,23 @@ func (c *Client) Create(ctx context.Context, length int64, metadata map[string]s
 		}
 		return "", errors.New(msg)
 	}
+	c.warnLocationDowngrade(u)
 	return u.String(), nil
+}
+
+// warnLocationDowngrade emits the one-line functional security note when an
+// https endpoint's 201 Location redirects the upload to plain http: every
+// PATCH would carry the credential unencrypted. The server-controlled URL
+// rides bounded (maxEchoChars); a nil Warn stays silent.
+func (c *Client) warnLocationDowngrade(u *url.URL) {
+	if c.Warn == nil {
+		return
+	}
+	eu, err := url.Parse(c.endpoint)
+	if err != nil || eu.Scheme != "https" || u.Scheme != "http" {
+		return
+	}
+	_, _ = fmt.Fprintf(c.Warn, "warning: the server redirected the upload to plain http (%s); the credential travels unencrypted\n", boundedEcho(u.String()))
 }
 
 // HeadOffset asks the server for an upload's progress. A 404 is data, not

@@ -292,8 +292,9 @@ func newTusUploadCommand(g *GlobalFlags, f *tusFlags) *cobra.Command {
 
 			// (6) the client: basic's credential round tripper rides as the
 			// base transport (--auth none passes a nil handler and nil
-			// base).
+			// base). Warn carries the functional security notes to stderr.
 			client := tus.NewClient(normEndpoint, handler, basicBase(handler), g.Insecure)
+			client.Warn = errOut
 
 			// (7) Functional security note, not mode-gated decoration: a
 			// credential sent to a plain-http endpoint travels unencrypted
@@ -317,13 +318,10 @@ func newTusUploadCommand(g *GlobalFlags, f *tusFlags) *cobra.Command {
 			var lastOffset int64
 			if uf.resume != "" {
 				// The resume offset for the step line: one HEAD before the
-				// orchestration. A miss stays silent — Upload re-HEADs and
-				// reports its canonical abort.
-				off, _, exists, herr := client.HeadOffset(ctx, uf.resume)
-				if herr != nil {
-					return fmt.Errorf("tus: resume %s: %w", uf.resume, herr)
-				}
-				if exists {
+				// orchestration. Best-effort by design — a transient failure
+				// here only omits the step line; Upload's own resume HEAD
+				// owns the outcome and reports its canonical abort.
+				if off, _, exists, herr := client.HeadOffset(ctx, uf.resume); herr == nil && exists {
 					steps = append(steps, fmt.Sprintf("resuming at offset %d", off))
 				}
 			}
@@ -337,8 +335,12 @@ func newTusUploadCommand(g *GlobalFlags, f *tusFlags) *cobra.Command {
 			url, err := client.Upload(ctx, file, size, metadata, chunkSize, uf.resume, max(uf.retry, 0), onProgress)
 			if err != nil {
 				// The CLI failure line is the one site that adds context
-				// (D3): the file and the last successfully-sent offset ride
-				// the error text in every mode; stdout stays empty.
+				// (D3): the file, the wire target once Upload knows it, and
+				// the last successfully-sent offset ride the error text in
+				// every mode; stdout stays empty.
+				if url != "" {
+					return fmt.Errorf("tus: uploading %s to %s at offset %d: %w", args[0], url, lastOffset, err)
+				}
 				return fmt.Errorf("tus: uploading %s at offset %d: %w", args[0], lastOffset, err)
 			}
 			// Flush the success-path step lines in event order: created (or
@@ -388,6 +390,7 @@ func newTusStatusCommand(g *GlobalFlags, f *tusFlags) *cobra.Command {
 		Short: "Report the staged offset of a tus upload",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			errOut := cmd.ErrOrStderr()
 			out := cmd.OutOrStdout()
 			uploadURL := args[0]
 
@@ -412,6 +415,10 @@ func newTusStatusCommand(g *GlobalFlags, f *tusFlags) *cobra.Command {
 			}
 
 			client := tus.NewClient(uploadURL, handler, basicBase(handler), g.Insecure)
+			client.Warn = errOut
+			if g.Auth != "none" {
+				tusWarnPlainHTTP(errOut, "url", uploadURL)
+			}
 			if g.Insecure {
 				ctx = context.WithValue(ctx, oauth2.HTTPClient, insecureHTTPClient())
 			}
@@ -452,6 +459,7 @@ func newTusDeleteCommand(g *GlobalFlags, f *tusFlags) *cobra.Command {
 		Short: "Remove a staged tus upload (termination extension)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			errOut := cmd.ErrOrStderr()
 			out := cmd.OutOrStdout()
 			uploadURL := args[0]
 
@@ -474,6 +482,10 @@ func newTusDeleteCommand(g *GlobalFlags, f *tusFlags) *cobra.Command {
 			}
 
 			client := tus.NewClient(uploadURL, handler, basicBase(handler), g.Insecure)
+			client.Warn = errOut
+			if g.Auth != "none" {
+				tusWarnPlainHTTP(errOut, "url", uploadURL)
+			}
 			if g.Insecure {
 				ctx = context.WithValue(ctx, oauth2.HTTPClient, insecureHTTPClient())
 			}

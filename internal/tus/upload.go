@@ -48,7 +48,10 @@ func isPermanentPatchErr(err error) bool {
 // onProgress fires after each successful PATCH with (sent, total). Errors
 // stay low-context: URL+offset context is added at exactly ONE site — the
 // CLI failure line — except where the diagnosis IS the context (the staged
-// URL in the swept/past-size aborts, both offsets in the stall abort).
+// URL in the swept/past-size aborts, both offsets in the stall abort). The
+// staged URL is nonetheless RETURNED alongside every error once known
+// (after Create succeeds; the resume target is the caller's input), so the
+// CLI failure line can name the wire target without a second channel.
 func (c *Client) Upload(ctx context.Context, f *os.File, size int64, metadata map[string]string, chunkSize int64, resumeURL string, retry int, onProgress func(sent, total int64)) (string, error) {
 	if chunkSize <= 0 {
 		chunkSize = defaultChunkSize
@@ -101,7 +104,7 @@ func (c *Client) Upload(ctx context.Context, f *os.File, size int64, metadata ma
 		// before a resync HEAD — wrapping the context error so errors.Is
 		// classifies operator Ctrl-C vs timeout (D3).
 		if cerr := ctx.Err(); cerr != nil {
-			return "", fmt.Errorf("tus: upload interrupted: %w", cerr)
+			return url, fmt.Errorf("tus: upload interrupted: %w", cerr)
 		}
 
 		// HEAD-resync: the server's offset is the sole recovery primitive.
@@ -111,13 +114,13 @@ func (c *Client) Upload(ctx context.Context, f *os.File, size int64, metadata ma
 			// budget allows (a partial append self-corrects via the next
 			// resync's 409); otherwise surface the resync error.
 			if attempts <= 0 {
-				return "", herr
+				return url, herr
 			}
 			attempts--
 			continue
 		}
 		if !exists {
-			return "", fmt.Errorf("tus: upload %s is no longer in staging; it may have landed or been swept — verify server-side", url)
+			return url, fmt.Errorf("tus: upload %s is no longer in staging; it may have landed or been swept — verify server-side", url)
 		}
 		switch {
 		case rOff == size:
@@ -128,22 +131,22 @@ func (c *Client) Upload(ctx context.Context, f *os.File, size int64, metadata ma
 			// tusd partial append: continue from the server offset, costing
 			// one retry.
 			if attempts <= 0 {
-				return "", perr
+				return url, perr
 			}
 			attempts--
 			offset = rOff
 		case rOff == offset:
 			if isPermanentPatchErr(perr) {
-				return "", fmt.Errorf("tus: the upload stalled at client offset %d (the server is at offset %d): %w", offset, rOff, perr)
+				return url, fmt.Errorf("tus: the upload stalled at client offset %d (the server is at offset %d): %w", offset, rOff, perr)
 			}
 			if attempts <= 0 {
-				return "", perr
+				return url, perr
 			}
 			attempts--
 		default:
 			// The server lost ground — fail closed instead of corrupting
 			// the upload by re-sending acknowledged bytes.
-			return "", fmt.Errorf("tus: the server resynced to offset %d, behind the last sent offset %d; the upload state is inconsistent", rOff, offset)
+			return url, fmt.Errorf("tus: the server resynced to offset %d, behind the last sent offset %d; the upload state is inconsistent", rOff, offset)
 		}
 	}
 	return url, nil

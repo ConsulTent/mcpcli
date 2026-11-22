@@ -41,6 +41,7 @@ type cliTusFake struct {
 	postAuth                       string   // last POST's Authorization header
 	patchAuth                      string   // last PATCH's Authorization header
 	patchOffsets                   []string // per-PATCH Upload-Offset request header
+	patchStatus                    int      // forced PATCH response status; 0 serves the normal 204
 }
 
 func newCliTusFake(t *testing.T) *cliTusFake {
@@ -141,6 +142,12 @@ func (f *cliTusFake) handlePatch(w http.ResponseWriter, r *http.Request) {
 	f.patches++
 	f.patchAuth = r.Header.Get("Authorization")
 	f.patchOffsets = append(f.patchOffsets, r.Header.Get("Upload-Offset"))
+	if forced := f.patchStatus; forced != 0 {
+		// A forced fault persists nothing: the resync HEAD answers the
+		// unchanged offset, so a no-budget run aborts on the PATCH error.
+		w.WriteHeader(forced)
+		return
+	}
 	if !f.exists {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -722,6 +729,17 @@ func TestInsecureWarningEveryMode(t *testing.T) {
 	if got := strings.Count(readStderr(), want); got != 1 {
 		t.Errorf("json-mode warning count = %d, want 1", got)
 	}
+
+	// Plain mode too: the warning is a raw Fprintln, not mode-gated
+	// decoration.
+	readStderr = captureOSStderr(t)
+	_, _, _, err = runRoot(t, "--insecure", "--plain", "--url", srv.URL, "ping")
+	if err != nil {
+		t.Fatalf("insecure ping --plain: %v", err)
+	}
+	if got := strings.Count(readStderr(), want); got != 1 {
+		t.Errorf("plain-mode warning count = %d, want 1", got)
+	}
 }
 
 // TestInsecureTLSMCPe2e proves the flag end-to-end: a self-signed TLS MCP
@@ -740,5 +758,29 @@ func TestInsecureTLSMCPe2e(t *testing.T) {
 	_, stderr, _, err := runRoot(t, "--insecure", "--url", tlsSrv.URL, "tools", "list")
 	if err != nil {
 		t.Fatalf("TLS with --insecure: %v\nstderr: %s", err, stderr)
+	}
+}
+
+// TestTusUploadErrorCarriesURL pins the fix-wave error contract: a
+// fresh-create mid-upload failure names the wire target and the last-sent
+// offset in the CLI failure line — in the returned error AND in the stderr
+// output cobra prints.
+func TestTusUploadErrorCarriesURL(t *testing.T) {
+	fake := newCliTusFake(t)
+	fake.mu.Lock()
+	fake.patchStatus = http.StatusInternalServerError
+	fake.mu.Unlock()
+	file := writeTusTempFile(t, "report.pdf", 200, 'x')
+
+	_, _, _, err := runRoot(t, "tus", "upload", file, "--api-url", fake.endpoint(), "--retry", "0")
+	if err == nil {
+		t.Fatal("upload with a 500 PATCH fault and no retry budget: nil error")
+	}
+	wantPrefix := "tus: uploading " + file + " to " + fake.uploadURL() + " at offset 0: "
+	if !strings.HasPrefix(err.Error(), wantPrefix) {
+		t.Fatalf("error = %q, want the %q prefix", err.Error(), wantPrefix)
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error %q does not carry the server status", err.Error())
 	}
 }

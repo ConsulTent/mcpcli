@@ -1547,3 +1547,58 @@ func TestDeleteStatuses(t *testing.T) {
 		}
 	})
 }
+
+// TestUploadErrorCarriesURL pins the fix-wave contract: once the upload URL
+// is known (Create succeeded), every PATCH-loop error path returns it
+// alongside the error, so the CLI failure line can name the wire target.
+func TestUploadErrorCarriesURL(t *testing.T) {
+	ft := newFakeTus(t, false)
+	ft.seed(true, 0, 64)
+	ft.queuePatch(fakeFault{status: http.StatusInternalServerError, body: "boom"})
+	f := tempFile(t, patternBytes(64))
+	defer func() { _ = f.Close() }()
+
+	url, err := NewClient(ft.endpoint(), nil, nil, false).Upload(context.Background(), f, 64, nil, 0, "", 0, nil)
+	if err == nil {
+		t.Fatal("Upload with a PATCH fault and no retry budget: nil error")
+	}
+	if url != ft.uploadURL() {
+		t.Fatalf("Upload error URL = %q, want the staged %q", url, ft.uploadURL())
+	}
+}
+
+// TestCreateLocationDowngradeWarning pins the Warn channel: an https
+// endpoint whose 201 Location redirects the upload to plain http emits the
+// functional security note BEFORE any PATCH fires; an https Location emits
+// nothing.
+func TestCreateLocationDowngradeWarning(t *testing.T) {
+	var warnBuf bytes.Buffer
+
+	ft := newFakeTus(t, true) // https endpoint
+	ft.queuePost(fakeFault{status: http.StatusCreated, location: "http://attacker.example.com/files/abc123"})
+	c := NewClient(ft.endpoint(), nil, nil, true)
+	c.Warn = &warnBuf
+
+	url, err := c.Create(context.Background(), 10, nil)
+	if err != nil {
+		t.Fatalf("Create with an http Location: %v", err)
+	}
+	if url != "http://attacker.example.com/files/abc123" {
+		t.Fatalf("Create URL = %q, want the redirected Location", url)
+	}
+	want := "warning: the server redirected the upload to plain http (http://attacker.example.com/files/abc123); the credential travels unencrypted\n"
+	if warnBuf.String() != want {
+		t.Fatalf("Warn = %q, want %q", warnBuf.String(), want)
+	}
+
+	// https endpoint + https Location: no note.
+	ft2 := newFakeTus(t, true)
+	c2 := NewClient(ft2.endpoint(), nil, nil, true)
+	c2.Warn = &warnBuf
+	if _, err := c2.Create(context.Background(), 10, nil); err != nil {
+		t.Fatalf("Create with an https Location: %v", err)
+	}
+	if warnBuf.String() != want {
+		t.Fatalf("Warn after an https Location = %q, want unchanged %q", warnBuf.String(), want)
+	}
+}
