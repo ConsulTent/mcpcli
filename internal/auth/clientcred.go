@@ -76,7 +76,12 @@ func (h *ccHandler) Authorize(ctx context.Context, req *http.Request, resp *http
 		resource = h.override
 	}
 
-	meta, err := sdkauth.GetAuthServerMetadata(ctx, issuer, http.DefaultClient)
+	// The metadata fetch reads the TLS client from the context: under
+	// --insecure the CLI injects a verification-skipping client, and
+	// oauth2.NewClient(ctx, nil) returns exactly that client (nil source →
+	// ContextClient), keeping the discovery chain on the same TLS posture
+	// as the transport itself.
+	meta, err := sdkauth.GetAuthServerMetadata(ctx, issuer, oauth2.NewClient(ctx, nil))
 	if err != nil {
 		return fmt.Errorf("fetching authorization server metadata for %s: %w", issuer, err)
 	}
@@ -217,7 +222,12 @@ func fetchPRM(ctx context.Context, metadataURL string) (*oauthex.ProtectedResour
 	// Redirects are never followed: a server-controlled 302 must not carry
 	// this fetch to an internal host past the initial URL check. A
 	// redirecting PRM endpoint becomes a fallthrough of the candidate chain.
+	// The transport adopts the context client's (oauth2.NewClient(ctx, nil)
+	// — the --insecure TLS-skip client when one is injected), while the
+	// no-redirect policy stays HERE: adopting the ctx client wholesale
+	// would silently drop the documented SSRF guard.
 	client := &http.Client{
+		Transport: oauth2.NewClient(ctx, nil).Transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("fetchPRM: redirect not followed")
 		},

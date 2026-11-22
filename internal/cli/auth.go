@@ -86,6 +86,7 @@ func newAuthLoginCommand(g *GlobalFlags) *cobra.Command {
 				Auth:            "oauth",
 				ProtocolVersion: g.Protocol,
 				AuthHandler:     handler,
+				Insecure:        g.Insecure,
 			})
 			if err != nil {
 				return err

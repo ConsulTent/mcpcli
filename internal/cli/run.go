@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -12,7 +14,24 @@ import (
 	"github.com/ConsulTent/mcpcli/internal/trace"
 	"github.com/ConsulTent/mcpcli/internal/ui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/oauth2"
 )
+
+// insecureHTTPClient returns an http.Client whose transport is a Clone of
+// http.DefaultTransport with TLSClientConfig.InsecureSkipVerify set — the
+// --insecure recipe every HTTP path of a run shares (tus builds the same
+// client inside its own package, connection.go inside its own). A Clone
+// preserves the proxy environment and HTTP/2 that a bare &http.Transport{}
+// would silently drop, and proxy + self-signed-MITM is exactly the
+// --insecure demographic.
+func insecureHTTPClient() *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	t.TLSClientConfig.InsecureSkipVerify = true
+	return &http.Client{Transport: t}
+}
 
 // runWithConnection is the shared runner for every command that talks to an
 // MCP server. It requires exactly one target (--command XOR --url, enforced
@@ -52,6 +71,16 @@ func runWithConnection(ctx context.Context, f *GlobalFlags, errOut io.Writer, fn
 
 	ctx, cancel := context.WithTimeout(ctx, f.Timeout)
 	defer cancel()
+
+	// --insecure: the TLS-skip client rides the context from here on, so
+	// every oauth/client-credentials discovery fetch inside the SDK
+	// contract (oauth2.NewClient(ctx, nil)) skips verification too. The
+	// connection layer sets transport.HTTPClient itself from
+	// Options.Insecure — ctx injection alone covers only discovery, not
+	// the transport's own wire requests.
+	if f.Insecure {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, insecureHTTPClient())
+	}
 
 	// Secret references resolve before anything connects: the expanded
 	// client secret feeds auth.Params below, and the env map (stdio runs
@@ -94,6 +123,7 @@ func runWithConnection(ctx context.Context, f *GlobalFlags, errOut io.Writer, fn
 			ProtocolVersion: f.Protocol,
 			AuthHandler:     handler,
 			Env:             env,
+			Insecure:        f.Insecure,
 			Tracer:          tracer,
 			Label:           "connect",
 		})
@@ -106,6 +136,7 @@ func runWithConnection(ctx context.Context, f *GlobalFlags, errOut io.Writer, fn
 				ProtocolVersion: f.Protocol,
 				AuthHandler:     handler,
 				Env:             env,
+				Insecure:        f.Insecure,
 			})
 			return err
 		})

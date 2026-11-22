@@ -16,14 +16,20 @@ type Source struct {
 	// exchange memo lives on the Client and spans Resolve calls).
 	// single-goroutine per run — no sync.Once.
 	client *Client
+
+	// insecure skips TLS certificate verification on the Client's
+	// transport — the global --insecure flag's secret-expansion seam, so
+	// bws:// ref expansion honors the flag like every other HTTP path.
+	insecure bool
 }
 
 // Compile-time check that Source implements secret.Source.
 var _ secret.Source = (*Source)(nil)
 
-// NewSource returns a Source with no options.
-func NewSource() *Source {
-	return &Source{}
+// NewSource returns a Source; insecure threads the global --insecure flag
+// into the lazily constructed Client.
+func NewSource(insecure bool) *Source {
+	return &Source{insecure: insecure}
 }
 
 // Scheme returns the scheme this source claims.
@@ -40,7 +46,7 @@ func (s *Source) Resolve(ctx context.Context, ref string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		s.client = NewClient(cred.APIURL, cred.IdentityURL, cred.APIToken, cred.OrgID)
+		s.client = NewClient(cred.APIURL, cred.IdentityURL, cred.APIToken, cred.OrgID, s.insecure)
 	}
 	sec, err := s.client.GetSecretByRef(ctx, ref)
 	if err != nil {

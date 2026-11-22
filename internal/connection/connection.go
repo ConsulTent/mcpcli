@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/kballard/go-shellquote"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/oauth2"
 )
 
 // Options describes how to reach an MCP server: either a stdio command or a
@@ -44,6 +46,13 @@ type Options struct {
 	// adds nothing.
 	Tracer *trace.Tracer
 	Label  string
+
+	// Insecure skips TLS certificate verification for the streamable HTTP
+	// transport and every discovery fetch inside the auth contract — the
+	// global --insecure flag's connection-layer seam. Inert for stdio
+	// (there is no TLS to relax). basic+insecure never reaches here: the
+	// cli root hook rejects the combination.
+	Insecure bool
 }
 
 // Validate checks that exactly one transport target is set and that OAuth is
@@ -82,6 +91,19 @@ func Open(ctx context.Context, o *Options) (*mcp.ClientSession, error) {
 		return nil, err
 	}
 
+	// --insecure: one TLS-skip client covers both halves of the HTTP
+	// surface — the transport's own wire requests and every consumer's
+	// discovery path: the SDK transport calls TokenSource and Authorize
+	// with the connect ctx, and oauth2.NewClient(ctx, nil) adopts the
+	// client carried there. Inert for stdio.
+	if o.Insecure {
+		client := insecureHTTPClient()
+		if st, ok := transport.(*mcp.StreamableClientTransport); ok {
+			st.HTTPClient = client
+		}
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, client)
+	}
+
 	// mcpversion is the internal/version package, aliased because Open's
 	// local `version` (the resolved protocol version) shadows the plain name.
 	client := mcp.NewClient(&mcp.Implementation{Name: "mcp", Version: mcpversion.Current()}, nil)
@@ -108,6 +130,22 @@ func Open(ctx context.Context, o *Options) (*mcp.ClientSession, error) {
 		return nil, fmt.Errorf("%w; server requires authorization; retry with --auth bearer, --auth oauth, or --auth basic", err)
 	}
 	return nil, err
+}
+
+// insecureHTTPClient returns an http.Client whose transport is a Clone of
+// http.DefaultTransport with TLSClientConfig.InsecureSkipVerify set — the
+// --insecure recipe the tus and cli packages share (each keeps its own
+// copy; extracting a helper package would be churn-only). A Clone preserves
+// the proxy environment and HTTP/2 that a bare &http.Transport{} would
+// silently drop, and proxy + self-signed-MITM is exactly the --insecure
+// demographic.
+func insecureHTTPClient() *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	t.TLSClientConfig.InsecureSkipVerify = true
+	return &http.Client{Transport: t}
 }
 
 // isUnauthorizedConnect reports whether a connect error looks like an HTTP

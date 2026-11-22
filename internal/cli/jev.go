@@ -754,6 +754,7 @@ func runJevCheck(ctx context.Context, f *GlobalFlags, probe, skipOnAuth bool, cm
 		ProtocolVersion: f.Protocol,
 		AuthHandler:     handler,
 		Env:             env,
+		Insecure:        f.Insecure,
 		Tracer:          tracer,
 		Label:           "jev check",
 	})

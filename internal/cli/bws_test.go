@@ -75,6 +75,24 @@ type bwsTestIdentity struct {
 func newBWSTestIdentity(t *testing.T) *bwsTestIdentity {
 	t.Helper()
 	fi := &bwsTestIdentity{}
+	srv := httptest.NewServer(fi.mux())
+	t.Cleanup(srv.Close)
+	fi.url = srv.URL
+	return fi
+}
+
+// newBWSTestIdentityTLS is the self-signed twin: same handlers on
+// httptest.NewTLSServer, so the --insecure threading is provable end to end.
+func newBWSTestIdentityTLS(t *testing.T) *bwsTestIdentity {
+	t.Helper()
+	fi := &bwsTestIdentity{}
+	srv := httptest.NewTLSServer(fi.mux())
+	t.Cleanup(srv.Close)
+	fi.url = srv.URL
+	return fi
+}
+
+func (fi *bwsTestIdentity) mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /connect/token", func(w http.ResponseWriter, r *http.Request) {
 		fi.mu.Lock()
@@ -88,10 +106,7 @@ func newBWSTestIdentity(t *testing.T) *bwsTestIdentity {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"access_token":%q,"encrypted_payload":%q}`, "cli-test-jwt", bwsTestEncPayload)
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	fi.url = srv.URL
-	return fi
+	return mux
 }
 
 // forceStatus makes every exchange answer with the given status.
@@ -121,13 +136,36 @@ type bwsTestAPI struct {
 
 func newBWSTestAPI(t *testing.T, orgKey []byte, secrets map[string]bws.Secret) *bwsTestAPI {
 	t.Helper()
+	fa := newBWSAPITestState(t, orgKey, secrets)
+	srv := httptest.NewServer(fa.mux())
+	t.Cleanup(srv.Close)
+	fa.url = srv.URL
+	return fa
+}
+
+// newBWSTestAPITLS is the self-signed twin: same handlers on
+// httptest.NewTLSServer, so the --insecure threading is provable end to end.
+func newBWSTestAPITLS(t *testing.T, orgKey []byte, secrets map[string]bws.Secret) *bwsTestAPI {
+	t.Helper()
+	fa := newBWSAPITestState(t, orgKey, secrets)
+	srv := httptest.NewTLSServer(fa.mux())
+	t.Cleanup(srv.Close)
+	fa.url = srv.URL
+	return fa
+}
+
+func newBWSAPITestState(t *testing.T, orgKey []byte, secrets map[string]bws.Secret) *bwsTestAPI {
+	t.Helper()
 	fa := &bwsTestAPI{wire: make(map[string]bws.Secret, len(secrets))}
 	for id, s := range secrets {
 		fa.wire[id] = bwsTestWireSecret(t, orgKey, s)
 		fa.ids = append(fa.ids, id)
 	}
 	slices.Sort(fa.ids)
+	return fa
+}
 
+func (fa *bwsTestAPI) mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /secrets/{id}", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
@@ -162,10 +200,7 @@ func newBWSTestAPI(t *testing.T, orgKey []byte, secrets map[string]bws.Secret) *
 			"continuationToken": "",
 		})
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	fa.url = srv.URL
-	return fa
+	return mux
 }
 
 func (fa *bwsTestAPI) getHits() int {
@@ -1094,5 +1129,50 @@ func TestBWSMultiInstance(t *testing.T) {
 	_, _, _, err = runRoot(t, "bws", "list", "--api-url", faB.url)
 	if err == nil || !strings.Contains(err.Error(), faA.url) {
 		t.Fatalf("list on the logged-out instance = %v, want a miss naming %q", err, faA.url)
+	}
+}
+
+// TestBWSInsecureE2E pins the --insecure threading through the bws verbs:
+// login, list and get all succeed against self-signed TLS fakes with the
+// flag, and login fails certificate verification without it.
+func TestBWSInsecureE2E(t *testing.T) {
+	bwsTestTokenDir(t)
+	orgKey := bwsTestOrgKey(t)
+	uuidRef := "11111111-2222-3333-4444-555555555555"
+	fa := newBWSTestAPITLS(t, orgKey, map[string]bws.Secret{
+		uuidRef: {ID: uuidRef, OrganizationID: bwsTestOrgID, Key: "first", Value: "value-tls", CanRead: true},
+	})
+	fi := newBWSTestIdentityTLS(t)
+
+	// Negative first: the same login without the flag hits the x509 wall.
+	_, _, _, err := runRoot(t, "bws", "login", "--api-url", fa.url, "--identity-url", fi.url,
+		"--access-token", bwsTestToken)
+	if err == nil || !strings.Contains(err.Error(), "x509") {
+		t.Fatalf("TLS bws login without --insecure = %v, want an x509 verification failure", err)
+	}
+
+	stdout, stderr, _, err := runRoot(t, "--insecure", "bws", "login", "--api-url", fa.url,
+		"--identity-url", fi.url, "--org", bwsTestOrgID, "--access-token", bwsTestToken)
+	if err != nil {
+		t.Fatalf("TLS bws login with --insecure: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout+stderr, "cli-test-machine") {
+		t.Errorf("login output %q does not name the machine account", stdout+stderr)
+	}
+
+	stdout, stderr, _, err = runRoot(t, "--insecure", "bws", "list", "--api-url", fa.url)
+	if err != nil {
+		t.Fatalf("TLS bws list with --insecure: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "first") {
+		t.Errorf("list stdout %q does not carry the secret name", stdout)
+	}
+
+	stdout, _, _, err = runRoot(t, "--insecure", "bws", "get", "--api-url", fa.url, uuidRef)
+	if err != nil {
+		t.Fatalf("TLS bws get with --insecure: %v", err)
+	}
+	if !strings.Contains(stdout, "value-tls") {
+		t.Errorf("get stdout %q does not carry the secret value", stdout)
 	}
 }
