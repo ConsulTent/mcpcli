@@ -503,8 +503,8 @@ mcp tus delete http://localhost:8095/files/0e3f…
 
 - `--chunk-size` takes a byte count with an optional `k`/`m`/`g` suffix
   (`64m`). Chunking is a client-side decision — tus defines no server chunk
-  size: the default is 64 MiB, a `<= 0` value keeps the default (one rule,
-  no special case), and a size at or above the file's size disables
+  size: the default is 64 MiB, a `<= 0` value keeps the default, and a
+  size at or above the file's size disables
   chunking (one POST, one PATCH).
 - `--metadata KEY=VALUE` (repeatable) adds upload metadata; values are raw
   strings, base64-encoded by the client per the tus spec. `--client`
@@ -577,10 +577,6 @@ Constraints to know:
 - Self-signed certificates: `--insecure` skips TLS certificate validation
   for the upload's HTTPS connection and the discovery fetches (see
   [Global flags](#global-flags)).
-
-Exit codes follow the global rule: `0` success, `1` failure — with one
-asymmetry: `tus status` answers a 404 as data (`exists:false`, exit 0),
-while `tus delete` of an absent upload (404/410) is a failure (exit 1).
 
 ## Jev judgment servers
 

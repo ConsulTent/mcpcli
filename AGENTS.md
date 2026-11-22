@@ -27,9 +27,11 @@ skill: `/plugin marketplace add ConsulTent/mcpcli`.
 
 - Invocation: `mcp [flags] <command>`. Exactly one of `--command` or `--url`
   identifies the target (`auth logout` accepts either and never connects).
-  The `tus` verbs are the other exception: they target a tus endpoint with
-  `--api-url` and never connect to an MCP server (`bws` is the same
-  precedent — its verbs take their own flags, no `--command`/`--url`).
+  The `tus` verbs are the other exception: `tus upload` targets a tus
+  endpoint via `--api-url`, while `tus status`/`delete` take the staged
+  upload's URL as their positional — none connect to an MCP server (`bws`
+  is the same precedent — its verbs take their own flags, no
+  `--command`/`--url`).
 - Results go to stdout; decoration (progress lines, spinners) goes to stderr.
   Capture stdout only and stderr is irrelevant to parsing.
 - `--json` makes every command print exactly one machine-readable JSON
@@ -173,15 +175,18 @@ mcp --command "npx -y @jkudish/jev-mcp" --env TYPESAFE_API_KEY=bws://jev --json 
 ```
 
 tus file uploads — `mcp tus upload`/`status`/`delete` push files to a tus
-1.0.0 resumable-upload endpoint; the verbs take `--api-url` (the creation
-endpoint, group-persistent) and never connect to an MCP server. Chunking is
-client-side (default 64 MiB; `--chunk-size` takes k/m/g suffixes, `<= 0`
-keeps the default, a size ≥ the file disables chunking); `--metadata
-KEY=VALUE` is repeatable (values raw strings, base64'd by the client; keys
-visible ASCII without space/comma); `--resume URL` continues a staged
-upload (same host as `--api-url` only); the failure line on stderr carries
-the staged URL (once the server has one) and the last offset in every mode
-(stdout stays empty on failure):
+1.0.0 resumable-upload endpoint; `upload` targets the `--api-url` creation
+endpoint (group-persistent), while `status`/`delete` take the staged
+upload's URL as their positional — none of them connect to an MCP server.
+Chunking is client-side (default 64 MiB; `--chunk-size` takes k/m/g
+suffixes, `<= 0` keeps the default, a size ≥ the file disables chunking);
+`--metadata KEY=VALUE` is repeatable (values raw strings, base64'd by the
+client; keys visible ASCII without space/comma; `--client` default
+`mcpcli` and `--filename` default the file's base name fill the two sugar
+keys); `--retry` (default 3) bounds retry-classified PATCH failures;
+`--resume URL` continues a staged upload (same host as `--api-url` only);
+the failure line on stderr carries the staged URL (once the server has
+one) and the last offset in every mode (stdout stays empty on failure):
 
 ```sh
 mcp tus upload report.pdf --api-url http://localhost:8095/files/ --chunk-size 1m --json
@@ -197,9 +202,7 @@ Auth rides the full global `--auth` surface (`--auth bearer --client-secret
 bws://ref` included). Client-credentials discovery requires https or a
 loopback host (private/reserved literal-IP dials are rejected even over
 https) — against a non-loopback plain-http endpoint use bearer, or https +
-`--insecure` for self-signed certs. Exit-code asymmetry: `tus status` 404
-is data (exit 0, `exists:false`); `tus delete` of an absent upload is an
-error (exit 1).
+`--insecure` for self-signed certs.
 
 stdio servers (local tools) — pass the whole command line as one string:
 
@@ -219,6 +222,8 @@ mcp --command "jev-use serve" --json jev ask "ship or hold?" --opt ship --opt ho
 mcp --command "npx -y @jkudish/jev-mcp" --json jev verify --claim "tests pass" --evidence "$CI_LOG"
 # verdicts[].answer is verified|contradicted|unsupported|unknown; label is the action (auto|review)
 mcp --command "npx -y @jkudish/jev-mcp" --json jev check   # flavor + support matrix
+mcp --command "jev-use serve" --json jev gate write_file --input '{"path":"x.txt"}'
+# gate checks one tool call; --input is inline JSON ("-" reads stdin), --state adds surrounding state
 ```
 (answers above are the live model's; they vary per call)
 

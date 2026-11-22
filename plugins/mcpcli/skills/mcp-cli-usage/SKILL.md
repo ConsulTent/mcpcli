@@ -19,9 +19,10 @@ scripts and CI.
 
 - Invoke as `mcp [flags] <command>`. Exactly one of `--command` (stdio server
   to launch) or `--url` (streamable HTTP endpoint) identifies the target.
-  `auth logout` accepts either and never connects; the `tus` verbs take
-  `--api-url` and the `bws` verbs take their own flags — neither ever
-  connects to an MCP server.
+  `auth logout` accepts either and never connects; `tus upload` takes
+  `--api-url` (its `status`/`delete` take the upload URL positional) and
+  the `bws` verbs take their own flags — none ever connects to an MCP
+  server.
 - Results go to stdout; decoration (progress lines, spinners) goes to stderr.
   Capture stdout only — stderr is irrelevant to parsing.
 - `--json` makes every command print exactly one machine-readable JSON
@@ -150,11 +151,14 @@ mcp bws get 00000000-0000-0000-0000-000000000002
 
 `mcp tus upload <file>` pushes a file to a tus 1.0.0 resumable-upload
 endpoint; `status <url>` reports the staged offset, `delete <url>` removes
-one. The verbs take `--api-url` (the creation endpoint) and never connect
-to an MCP server. Chunking is client-side — default 64 MiB, `--chunk-size`
-takes k/m/g suffixes (`1m`), `<= 0` keeps the default, a size ≥ the file
-disables chunking. `--resume URL` continues a staged upload (same host as
-`--api-url` only). Auth rides the full global `--auth` surface.
+one. `upload` targets the `--api-url` creation endpoint; `status`/`delete`
+take the upload URL positional — none connect to an MCP server. Chunking is
+client-side — default 64 MiB, `--chunk-size` takes k/m/g suffixes (`1m`),
+`<= 0` keeps the default, a size ≥ the file disables chunking. `--client`
+(default `mcpcli`) and `--filename` (default: the file's base name) fill
+the metadata sugar keys; `--retry` (default 3) bounds PATCH retries.
+`--resume URL` continues a staged upload (same host as `--api-url` only).
+Auth rides the full global `--auth` surface.
 
 ```sh
 mcp tus upload report.pdf --api-url http://localhost:8095/files/ --chunk-size 1m --json
