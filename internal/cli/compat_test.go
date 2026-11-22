@@ -290,7 +290,9 @@ func newAuthRequiredMCPServer(t *testing.T) *httptest.Server {
 func TestCompatE2EAuthenticated(t *testing.T) {
 	authed := newAuthRequiredMCPServer(t)
 
-	stdout, stderr, _, err := runRoot(t, "--url", authed.URL, "--auth", "bearer",
+	// --insecure: the auth-required fake serves plain http on a loopback
+	// host — the plain-http credential gate's one allowance.
+	stdout, stderr, _, err := runRoot(t, "--url", authed.URL, "--auth", "bearer", "--insecure",
 		"--client-secret", "ok", "--json", "compat")
 	if err != nil {
 		t.Fatalf("authed compat: %v\nstderr: %s", err, stderr)

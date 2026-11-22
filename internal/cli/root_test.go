@@ -175,39 +175,103 @@ func TestClientSecretEnvNoWarning(t *testing.T) {
 // the BWS instance warning, written straight to os.Stderr in every mode.
 const plainHTTPURLWarning = "warning: --url is plain http; the credential sent to it travels unencrypted"
 
-// TestPlainHTTPURLWarning pins the warning matrix: both spellings of the
-// scheme warn under --auth bearer (url.Parse lowercases the scheme, so the
-// check must too); https stays silent; plain http without credentials stays
-// silent even when a literal --client-secret rides argv — that run warns
-// about argv visibility, and the raw flag layer sends nothing under
-// --auth none.
+// plainHTTPGateError is the golden gate string the root's PersistentPreRunE
+// returns when --url is plain http AND a credential is in play (--auth
+// beyond none, or the auth-login exchange) AND the loopback+--insecure
+// allowance does not apply. Mode-neutral, byte-exact, one golden.
+const plainHTTPGateError = "--url is plain http; the credential sent to it travels unencrypted — use https, or --insecure with a localhost/127.0.0.1 endpoint"
+
+// TestPlainHTTPURLWarning pins the gate matrix: both spellings of the scheme
+// error under --auth bearer on a NON-loopback host (url.Parse lowercases the
+// scheme, so the check must too; --insecure cannot rescue non-loopback);
+// https stays silent; plain http without credentials stays silent even when
+// a literal --client-secret rides argv — that run warns about argv
+// visibility, and the raw flag layer sends nothing under --auth none.
 func TestPlainHTTPURLWarning(t *testing.T) {
 	cases := []struct {
-		name       string
-		args       []string
-		wantWarned bool
+		name    string
+		args    []string
+		wantErr string // empty: the run must succeed with no gate error
 	}{
-		{"http url with auth bearer", []string{"--url", "http://example.invalid/mcp", "--auth", "bearer"}, true},
-		{"uppercase scheme is still plain http", []string{"--url", "HTTP://example.invalid/mcp", "--auth", "bearer"}, true},
-		{"https stays silent", []string{"--url", "https://example.invalid/mcp", "--auth", "bearer"}, false},
-		{"http with auth none and literal secret stays silent", []string{"--url", "http://example.invalid/mcp", "--client-secret", "literal-token"}, false},
+		{"http url with auth bearer", []string{"--url", "http://example.invalid/mcp", "--auth", "bearer"}, plainHTTPGateError},
+		{"uppercase scheme is still plain http", []string{"--url", "HTTP://example.invalid/mcp", "--auth", "bearer"}, plainHTTPGateError},
+		{"https stays silent", []string{"--url", "https://example.invalid/mcp", "--auth", "bearer"}, ""},
+		{"http with auth none and literal secret stays silent", []string{"--url", "http://example.invalid/mcp", "--client-secret", "literal-token"}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			readStderr := captureOSStderr(t)
 			// No subcommand: the root runs Help() after its hook fires, so
-			// the warning region executes without any connection attempt.
+			// the gate region executes without any connection attempt.
 			_, _, _, err := runRoot(t, tc.args...)
-			if err != nil {
-				t.Fatalf("bare root run: %v", err)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("bare root run: %v", err)
+				}
+				if got := strings.Count(readStderr(), plainHTTPURLWarning); got != 0 {
+					t.Fatalf("plain-http warning fired %d time(s), want silent", got)
+				}
+				return
 			}
-			if got := strings.Count(readStderr(), plainHTTPURLWarning); tc.wantWarned && got != 1 {
-				t.Fatalf("plain-http warning count = %d, want exactly 1", got)
-			} else if !tc.wantWarned && got != 0 {
-				t.Fatalf("plain-http warning fired %d time(s), want silent", got)
+			if err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("gate error = %v, want byte-exact %q", err, tc.wantErr)
 			}
 		})
 	}
+}
+
+// TestPlainHTTPCredentialGate pins the gate's allow/deny split beyond the
+// non-loopback rows above: loopback http + a credential errors without the
+// opt-in (the same golden string), loopback + --insecure proceeds with the
+// one-line warning, https + a credential never meets the gate, and the
+// operator's compat repro exits 1 pre-connect — succeeding with --insecure
+// against a live loopback server.
+func TestPlainHTTPCredentialGate(t *testing.T) {
+	t.Run("loopback http with bearer and no insecure errors", func(t *testing.T) {
+		readStderr := captureOSStderr(t)
+		_, _, _, err := runRoot(t, "--url", "http://localhost:1/mcp", "--auth", "bearer")
+		if err == nil || err.Error() != plainHTTPGateError {
+			t.Fatalf("loopback gate error = %v, want byte-exact %q", err, plainHTTPGateError)
+		}
+		if got := strings.Count(readStderr(), plainHTTPURLWarning); got != 0 {
+			t.Fatalf("denied run printed the plain-http warning %d time(s), want 0 (the error is the report)", got)
+		}
+	})
+
+	t.Run("loopback http with bearer and insecure proceeds with the warning", func(t *testing.T) {
+		readStderr := captureOSStderr(t)
+		// Bare root: Help() runs after the hook, so the allow branch is
+		// observable without any connection.
+		_, _, _, err := runRoot(t, "--url", "http://localhost:1/mcp", "--auth", "bearer", "--insecure")
+		if err != nil {
+			t.Fatalf("loopback + insecure bare root: %v", err)
+		}
+		if got := strings.Count(readStderr(), plainHTTPURLWarning); got != 1 {
+			t.Fatalf("plain-http warning count = %d, want exactly 1", got)
+		}
+	})
+
+	t.Run("operator compat repro errors pre-connect and proceeds with insecure", func(t *testing.T) {
+		// The verbatim flag shape from the ruling: compat over a loopback
+		// http URL with a bearer credential. The gate fires in the hook,
+		// before compat opens any probe session — the dead port is never
+		// dialed (the explicit --timeout bounds nothing in the green state;
+		// it only keeps a regression honest if the gate ever goes missing).
+		_, _, _, err := runRoot(t, "--url", "http://localhost:8484/mcp", "--auth", "bearer",
+			"--client-secret", "x", "--timeout", "2s", "compat")
+		if err == nil || err.Error() != plainHTTPGateError {
+			t.Fatalf("compat repro error = %v, want byte-exact %q", err, plainHTTPGateError)
+		}
+
+		// Adding --insecure passes the hook: against a live loopback server
+		// the same shape succeeds end to end.
+		srv := newTestMCPServer(t)
+		_, _, _, err = runRoot(t, "--url", srv.URL, "--auth", "bearer",
+			"--client-secret", "loopback-dummy-token", "--insecure", "compat")
+		if err != nil {
+			t.Fatalf("compat repro with --insecure against a live loopback server: %v", err)
+		}
+	})
 }
 
 // TestRootEnvSyntaxErrors pins the golden --env parse errors in the exact

@@ -25,6 +25,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/ConsulTent/mcpcli/internal/auth"
 )
 
 // NormalizeURL canonicalizes an instance base URL for both the API and the
@@ -188,6 +190,7 @@ type Client struct {
 	identityURL string
 	accessToken string
 	orgID       string
+	insecure    bool
 	http        *http.Client
 
 	// Parsed access-token parts; tokenErr surfaces on first use.
@@ -228,6 +231,7 @@ func NewClient(apiURL, identityURL, accessToken, orgID string, insecure bool) *C
 		identityURL: identityURL,
 		accessToken: accessToken,
 		orgID:       orgID,
+		insecure:    insecure,
 		http: &http.Client{
 			// No credential re-POST to 307/308 targets, no silent
 			// https→http downgrade: a redirect surfaces as its 3xx status.
@@ -258,6 +262,26 @@ func (c *Client) tokenGate() error {
 	return nil
 }
 
+// plainHTTPGate enforces the transport-policy rule at one site's base URL:
+// a credential (the machine-account exchange POST, the JWT bearer) never
+// travels plain http. Loopback http with insecure opted in is the one
+// allowance; every other plain-http base — including non-loopback hosts
+// even with insecure — is refused before any wire bytes, naming the firing
+// site's base so the error maps to the actionable knob (--identity-url,
+// --api-url, or the cached instance). A parse failure or an empty host
+// counts as non-loopback: fail closed, same string. Consequence, not a
+// built feature: stale non-loopback http cached instances and bws://
+// expansion reads fail closed through this same gate.
+func (c *Client) plainHTTPGate(base string) error {
+	if !strings.HasPrefix(base, "http://") {
+		return nil
+	}
+	if u, err := url.Parse(base); err == nil && u.Hostname() != "" && auth.IsLoopbackHost(u.Host) && c.insecure {
+		return nil
+	}
+	return fmt.Errorf("bws: %s is plain http; the credential sent to it travels unencrypted — use https, or --insecure with a localhost/127.0.0.1 instance", base)
+}
+
 // ErrUnauthorized is the sentinel wrapped by every Exchange 401 error: the
 // identity server rejected the machine-account token. Callers match it with
 // errors.Is — never by string-matching the unioned message, whose text is
@@ -281,8 +305,13 @@ func (e *unauthorizedError) Unwrap() error { return ErrUnauthorized }
 // grant_type/client_id/client_secret/scope. A 401 carries the runtime
 // unioned message naming both causes (stale/rotated token or identity-URL
 // mismatch); other non-2xx statuses carry the status and a bounded body; a
-// 2xx parse failure is a shape error WITHOUT the body.
+// 2xx parse failure is a shape error WITHOUT the body. The plain-http
+// credential gate fires first: the machine-account token never travels an
+// unencrypted identity base.
 func (c *Client) Exchange(ctx context.Context) (*TokenResponse, error) {
+	if err := c.plainHTTPGate(c.identityURL); err != nil {
+		return nil, err
+	}
 	if err := c.tokenGate(); err != nil {
 		return nil, err
 	}
@@ -476,8 +505,13 @@ func (c *Client) orgKey(ctx context.Context) ([]byte, error) {
 
 // apiCall performs one authenticated API call (bearer JWT from the memoized
 // exchange) and returns the 2xx body. Non-2xx errors carry the status and a
-// bounded body; a 403 adds the machine-account remediation pointer.
+// bounded body; a 403 adds the machine-account remediation pointer. The
+// plain-http credential gate fires first: the JWT never travels an
+// unencrypted api base.
 func (c *Client) apiCall(ctx context.Context, method, target string, body []byte) ([]byte, error) {
+	if err := c.plainHTTPGate(c.apiURL); err != nil {
+		return nil, err
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)

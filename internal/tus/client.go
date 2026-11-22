@@ -1,7 +1,10 @@
 // Package tus is a thin pure-Go tus 1.0.0 client (creation, HEAD, PATCH,
 // termination) for resumable file uploads — the internal/bws
 // thin-stdlib-client template applied to the tus protocol: no new
-// dependencies, sentinel errors matched with errors.Is, byte-stable wrapper
+// dependencies (the only imports beyond stdlib are the go-sdk `auth`
+// package already in go.mod and the internal auth package, reused for
+// IsLoopbackHost in the plain-http credential gate), sentinel errors
+// matched with errors.Is, byte-stable wrapper
 // messages for goldens, bounded diagnostics (maxDiagBytes body echo,
 // maxEchoChars server strings), and redirects never followed
 // (http.ErrUseLastResponse — no credential re-POST, no https→http
@@ -27,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ConsulTent/mcpcli/internal/auth"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"golang.org/x/oauth2"
 )
@@ -260,10 +264,24 @@ func (c *Client) do(mkReq func() (*http.Request, error)) (*http.Response, error)
 // injects the bearer per the SDK contract and sends it. The request is
 // returned with the response so do can hand the failing request to
 // handler.Authorize.
+//
+// THE RULE, at the package's only wire boundary: a credential never travels
+// plain http. When the built request targets an http:// URL and a handler is
+// in play (the credential signal — nil means --auth none sends nothing), the
+// request is refused BEFORE injectToken and before any wire bytes unless the
+// host is literal loopback AND insecure was opted in. One guard therefore
+// covers --api-url, --resume, the status/delete positionals, Location-derived
+// URLs (the https→http downgrade) and the same-host-different-scheme resume
+// hole tusSameHostGuard's host-only comparison cannot see. The error is a
+// plain string with no sentinel: Upload's retry classifier matches only the
+// four existing sentinels, so it is non-retryable by non-match.
 func (c *Client) send(mkReq func() (*http.Request, error)) (*http.Request, *http.Response, error) {
 	req, err := mkReq()
 	if err != nil {
 		return nil, nil, fmt.Errorf("tus: building the request: %w", err)
+	}
+	if req.URL.Scheme == "http" && c.handler != nil && (!auth.IsLoopbackHost(req.URL.Host) || !c.insecure) {
+		return nil, nil, fmt.Errorf("tus: the request to %s is plain http; the credential sent to it travels unencrypted — use https, or --insecure with a localhost/127.0.0.1 endpoint", boundedEcho(req.URL.String()))
 	}
 	req.Header.Set("Tus-Resumable", tusVersion)
 	if err := c.injectToken(req); err != nil {
@@ -393,8 +411,12 @@ func (c *Client) Create(ctx context.Context, length int64, metadata map[string]s
 
 // warnLocationDowngrade emits the one-line functional security note when an
 // https endpoint's 201 Location redirects the upload to plain http: every
-// PATCH would carry the credential unencrypted. The server-controlled URL
-// rides bounded (maxEchoChars); a nil Warn stays silent.
+// PATCH would carry the credential unencrypted. Under the plain-http
+// credential gate in send() the note now precedes either the one allowed
+// case (a loopback Location host with insecure opted in) or the pre-wire
+// refusal — warning-then-error on the forbidden path is the accepted
+// double report. The server-controlled URL rides bounded (maxEchoChars); a
+// nil Warn stays silent.
 func (c *Client) warnLocationDowngrade(u *url.URL) {
 	if c.Warn == nil {
 		return

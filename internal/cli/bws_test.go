@@ -279,10 +279,13 @@ func bwsTestSecrets(t *testing.T, orgKey []byte) map[string]bws.Secret {
 
 // bwsTestLogin runs one bws login against the fakes and fails the test on
 // error. The token always rides argv here (tests asserting the env path use
-// t.Setenv + their own runRoot call).
+// t.Setenv + their own runRoot call). --insecure is always passed: the
+// fakes serve plain http on loopback hosts, and the machine-account
+// exchange trips the bws plain-http credential gate without the loopback
+// opt-in.
 func bwsTestLogin(t *testing.T, apiURL, identityURL string, extra ...string) string {
 	t.Helper()
-	args := []string{"bws", "login", "--api-url", apiURL, "--identity-url", identityURL, "--access-token", bwsTestToken}
+	args := []string{"--insecure", "bws", "login", "--api-url", apiURL, "--identity-url", identityURL, "--access-token", bwsTestToken}
 	args = append(args, extra...)
 	_, stderr, _, err := runRoot(t, args...)
 	if err != nil {
@@ -349,7 +352,7 @@ func TestBWSLoginE2E(t *testing.T) {
 
 	// Org-key round trip through the CACHED credential: a separate run
 	// exchanges again against the fake identity and decrypts list keys.
-	stdout, _, _, err := runRoot(t, "bws", "list", "--api-url", fa.url)
+	stdout, _, _, err := runRoot(t, "--insecure", "bws", "list", "--api-url", fa.url)
 	if err != nil {
 		t.Fatalf("bws list after login: %v", err)
 	}
@@ -365,7 +368,7 @@ func TestBWSLoginJSON(t *testing.T) {
 	t.Setenv("MCPCLI_BWS_ACCESS_TOKEN", bwsTestToken) // env-sourced: no argv warning
 
 	// Without --org: org_id PRESENT and empty (constant key set).
-	stdout, stderr, _, err := runRoot(t, "--json", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url)
+	stdout, stderr, _, err := runRoot(t, "--json", "--insecure", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url)
 	if err != nil {
 		t.Fatalf("login --json: %v", err)
 	}
@@ -393,7 +396,7 @@ func TestBWSLoginJSON(t *testing.T) {
 	}
 
 	// With --org: the full cell.
-	stdout, _, _, err = runRoot(t, "--json", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--org", bwsTestOrgID)
+	stdout, _, _, err = runRoot(t, "--json", "--insecure", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--org", bwsTestOrgID)
 	if err != nil {
 		t.Fatalf("login --json with org: %v", err)
 	}
@@ -412,7 +415,7 @@ func TestBWSLoginWarnsArgvToken(t *testing.T) {
 	fi := newBWSTestIdentity(t)
 	fa := newBWSTestAPI(t, bwsTestOrgKey(t), map[string]bws.Secret{})
 
-	_, stderr, _, err := runRoot(t, "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
+	_, stderr, _, err := runRoot(t, "--insecure", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
 	if err != nil {
 		t.Fatalf("login with argv token: %v", err)
 	}
@@ -448,7 +451,7 @@ func TestBWSLoginDefaults(t *testing.T) {
 	// No --api-url: the default applies BEFORE normalization and lands in
 	// the cache normalized. The identity side points at the fake so the
 	// validation exchange stays on the loopback.
-	if _, stderr, _, err := runRoot(t, "bws", "login", "--identity-url", fi.url, "--access-token", bwsTestToken); err != nil {
+	if _, stderr, _, err := runRoot(t, "--insecure", "bws", "login", "--identity-url", fi.url, "--access-token", bwsTestToken); err != nil {
 		t.Fatalf("login with defaults: %v\nstderr: %s", err, stderr)
 	}
 	cred, err := bws.ResolveCredential("https://api.bitwarden.com")
@@ -468,9 +471,10 @@ func TestBWSLoginHTTPWarns(t *testing.T) {
 	fi := newBWSTestIdentity(t)
 	fa := newBWSTestAPI(t, bwsTestOrgKey(t), map[string]bws.Secret{})
 
-	// httptest serves plain http: both resolved URLs warn, and the warning
-	// is not an error (the no-blocklist ruling).
-	_, stderr, _, err := runRoot(t, "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
+	// httptest serves plain http: both resolved URLs warn, and under the
+	// plain-http credential gate the loopback host + --insecure allowance
+	// keeps the login working — the warnings cover exactly the allowed case.
+	_, stderr, _, err := runRoot(t, "--insecure", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
 	if err != nil {
 		t.Fatalf("login over http: %v", err)
 	}
@@ -492,7 +496,7 @@ func TestBWSLogin401SentinelTail(t *testing.T) {
 	fa := newBWSTestAPI(t, bwsTestOrgKey(t), map[string]bws.Secret{})
 	fi.forceStatus(http.StatusUnauthorized)
 
-	_, _, _, err := runRoot(t, "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
+	_, _, _, err := runRoot(t, "--insecure", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
 	if err == nil {
 		t.Fatal("login against a 401 identity server: nil error")
 	}
@@ -531,7 +535,7 @@ func TestBWSLoginNoOrgStateVariants(t *testing.T) {
 	}
 
 	// --plain: the ASCII variant, zero non-ASCII anywhere.
-	stdout, stderr, dec, err := runRoot(t, "--plain", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
+	stdout, stderr, dec, err := runRoot(t, "--plain", "--insecure", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
 	if err != nil {
 		t.Fatalf("plain login: %v\nstderr: %s", err, stderr)
 	}
@@ -548,7 +552,7 @@ func TestBWSLoginNoOrgStateVariants(t *testing.T) {
 	// --json: the same degraded login reports org_id PRESENT and empty
 	// (constant key set). Characterization pin, green-on-arrival — the
 	// shape shipped with the login --json document.
-	stdout, _, _, err = runRoot(t, "--json", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
+	stdout, _, _, err = runRoot(t, "--json", "--insecure", "bws", "login", "--api-url", fa.url, "--identity-url", fi.url, "--access-token", bwsTestToken)
 	if err != nil {
 		t.Fatalf("json login: %v", err)
 	}
@@ -725,7 +729,7 @@ func TestBWSListE2E(t *testing.T) {
 	fa := newBWSTestAPI(t, orgKey, bwsTestSecrets(t, orgKey))
 	bwsTestLogin(t, fa.url, fi.url, "--org", bwsTestOrgID)
 
-	stdout, stderr, _, err := runRoot(t, "bws", "list", "--api-url", fa.url)
+	stdout, stderr, _, err := runRoot(t, "--insecure", "bws", "list", "--api-url", fa.url)
 	if err != nil {
 		t.Fatalf("bws list: %v", err)
 	}
@@ -741,7 +745,7 @@ func TestBWSListE2E(t *testing.T) {
 	}
 
 	// --plain: zero non-ASCII anywhere (ASCII borders, ASCII grant labels).
-	stdout, stderr, dec, err := runRoot(t, "--plain", "bws", "list", "--api-url", fa.url)
+	stdout, stderr, dec, err := runRoot(t, "--plain", "--insecure", "bws", "list", "--api-url", fa.url)
 	if err != nil {
 		t.Fatalf("bws list --plain: %v", err)
 	}
@@ -751,7 +755,7 @@ func TestBWSListE2E(t *testing.T) {
 
 	// A 403 on the list surfaces the client's remediation pointer.
 	fa.forceList(http.StatusForbidden)
-	_, _, _, err = runRoot(t, "bws", "list", "--api-url", fa.url)
+	_, _, _, err = runRoot(t, "--insecure", "bws", "list", "--api-url", fa.url)
 	fa.forceList(0)
 	if err == nil || !strings.Contains(err.Error(), "machine account") || !strings.Contains(err.Error(), "Bitwarden") {
 		t.Errorf("403 list error = %v, want the machine-account remediation", err)
@@ -777,7 +781,7 @@ func TestBWSListHostileKeySanitized(t *testing.T) {
 	})
 	bwsTestLogin(t, fa.url, fi.url, "--org", bwsTestOrgID)
 
-	stdout, _, _, err := runRoot(t, "bws", "list", "--api-url", fa.url)
+	stdout, _, _, err := runRoot(t, "--insecure", "bws", "list", "--api-url", fa.url)
 	if err != nil {
 		t.Fatalf("bws list: %v", err)
 	}
@@ -796,7 +800,7 @@ func TestBWSListJSON(t *testing.T) {
 	// Zero secrets: secrets present, empty, NOT nil.
 	faEmpty := newBWSTestAPI(t, bwsTestOrgKey(t), map[string]bws.Secret{})
 	bwsTestLogin(t, faEmpty.url, fi.url, "--org", bwsTestOrgID)
-	stdout, stderr, _, err := runRoot(t, "--json", "bws", "list", "--api-url", faEmpty.url)
+	stdout, stderr, _, err := runRoot(t, "--json", "--insecure", "bws", "list", "--api-url", faEmpty.url)
 	if err != nil {
 		t.Fatalf("list --json (zero): %v", err)
 	}
@@ -822,7 +826,7 @@ func TestBWSListJSON(t *testing.T) {
 	orgKey := bwsTestOrgKey(t)
 	fa := newBWSTestAPI(t, orgKey, bwsTestSecrets(t, orgKey))
 	bwsTestLogin(t, fa.url, fi.url, "--org", bwsTestOrgID)
-	stdout, _, _, err = runRoot(t, "--json", "bws", "list", "--api-url", fa.url)
+	stdout, _, _, err = runRoot(t, "--json", "--insecure", "bws", "list", "--api-url", fa.url)
 	if err != nil {
 		t.Fatalf("list --json (one): %v", err)
 	}
@@ -909,7 +913,7 @@ func TestBWSGetE2E(t *testing.T) {
 
 	// Ref order governs output order; values land on stdout, the instance
 	// note on stderr.
-	stdout, stderr, _, err := runRoot(t, "bws", "get", "--api-url", fa.url, "second", "first")
+	stdout, stderr, _, err := runRoot(t, "--insecure", "bws", "get", "--api-url", fa.url, "second", "first")
 	if err != nil {
 		t.Fatalf("bws get: %v", err)
 	}
@@ -921,7 +925,7 @@ func TestBWSGetE2E(t *testing.T) {
 	}
 
 	// --plain: zero non-ASCII.
-	stdout, stderr, dec, err := runRoot(t, "--plain", "bws", "get", "--api-url", fa.url, "first")
+	stdout, stderr, dec, err := runRoot(t, "--plain", "--insecure", "bws", "get", "--api-url", fa.url, "first")
 	if err != nil {
 		t.Fatalf("bws get --plain: %v", err)
 	}
@@ -937,7 +941,7 @@ func TestBWSGetJSON(t *testing.T) {
 	fa := newBWSTestAPI(t, orgKey, bwsTestSecrets(t, orgKey))
 	bwsTestLogin(t, fa.url, fi.url, "--org", bwsTestOrgID)
 
-	stdout, _, _, err := runRoot(t, "--json", "bws", "get", "--api-url", fa.url, "second", "first")
+	stdout, _, _, err := runRoot(t, "--json", "--insecure", "bws", "get", "--api-url", fa.url, "second", "first")
 	if err != nil {
 		t.Fatalf("bws get --json: %v", err)
 	}
@@ -1005,7 +1009,7 @@ func TestBWSGetAbortOnFirst(t *testing.T) {
 	badRef := "99999999-2222-3333-4444-555555555555"
 
 	// (a) The first failing ref stops the loop and is named in the error.
-	_, _, _, err := runRoot(t, "bws", "get", "--api-url", fa.url, badRef, "first")
+	_, _, _, err := runRoot(t, "--insecure", "bws", "get", "--api-url", fa.url, badRef, "first")
 	if err == nil || !strings.Contains(err.Error(), badRef) {
 		t.Fatalf("get with a failing first ref = %v, want an error naming %q", err, badRef)
 	}
@@ -1015,7 +1019,7 @@ func TestBWSGetAbortOnFirst(t *testing.T) {
 
 	// (b) In JSON mode the refs resolved before the failure still emit their
 	// partial document before the error (the third stdout-on-failure class).
-	stdout, _, _, err := runRoot(t, "--json", "bws", "get", "--api-url", fa.url, "first", badRef)
+	stdout, _, _, err := runRoot(t, "--json", "--insecure", "bws", "get", "--api-url", fa.url, "first", badRef)
 	if err == nil || !strings.Contains(err.Error(), badRef) {
 		t.Fatalf("get --json with a failing second ref = %v, want an error naming %q", err, badRef)
 	}
@@ -1093,7 +1097,7 @@ func TestBWSMultiInstance(t *testing.T) {
 
 	// list resolves per --api-url: each instance shows only its own secret,
 	// and the note names the resolved instance.
-	stdout, stderr, _, err := runRoot(t, "bws", "list", "--api-url", faA.url)
+	stdout, stderr, _, err := runRoot(t, "--insecure", "bws", "list", "--api-url", faA.url)
 	if err != nil {
 		t.Fatalf("list A: %v", err)
 	}
@@ -1103,7 +1107,7 @@ func TestBWSMultiInstance(t *testing.T) {
 	if !strings.Contains(stderr, "bws: using instance "+faA.url) {
 		t.Errorf("list A stderr %q names the wrong instance", stderr)
 	}
-	stdout, _, _, err = runRoot(t, "bws", "list", "--api-url", faB.url)
+	stdout, _, _, err = runRoot(t, "--insecure", "bws", "list", "--api-url", faB.url)
 	if err != nil {
 		t.Fatalf("list B: %v", err)
 	}

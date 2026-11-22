@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -200,16 +201,33 @@ Copyright ConsulTent Pte. Ltd., all Rights Reserved.`,
 			if g.ClientSecret != "" && !resolver.Recognizes(g.ClientSecret) {
 				_, _ = fmt.Fprintln(os.Stderr, "warning: --client-secret was passed on the command line; prefer bws:// references or MCPCLI_CLIENT_SECRET")
 			}
-			// Functional security note, not mode-gated decoration: a credential
-			// (bearer or basic secrets, client-credentials, oauth token, or the
-			// auth-login exchange) sent to a plain-http URL travels
-			// unencrypted — the same no-blocklist ruling as the BWS instance
-			// warning. The scheme check lowercases because url.Parse does
-			// (HTTP:// transports plaintext past a raw-prefix test); the
-			// predicate is the raw flag layer only — env secrets merge later
-			// in ResolveCredentials, and --auth none sends nothing.
+			// The plain-http credential gate: a credential (bearer or basic
+			// secrets, client-credentials, oauth token, or the auth-login
+			// exchange) NEVER travels over plain http. Loopback http with
+			// --insecure is the one allowance (one warning line, proceed);
+			// everything else — including any non-loopback host, even with
+			// --insecure — fails closed here, pre-connect, with one
+			// mode-neutral golden string (no per-mode variants). A parse
+			// failure or an empty host counts as non-loopback and returns
+			// the same string: fail closed, no second golden. The scheme
+			// check lowercases because url.Parse does (HTTP:// transports
+			// plaintext past a raw-prefix test); the predicate is the raw
+			// flag layer only — env secrets merge later in
+			// ResolveCredentials, and --auth none sends nothing. The
+			// tus/bws verbs carry their own wire-boundary twins of this
+			// gate (their --api-url/--identity-url flags never reach --url).
+			// Ordered after the basic+insecure rejection above so that
+			// combo keeps its existing message.
 			if strings.HasPrefix(strings.ToLower(g.URL), "http://") && (g.Auth != "none" || isAuthLogin) {
-				_, _ = fmt.Fprintln(os.Stderr, "warning: --url is plain http; the credential sent to it travels unencrypted")
+				loopback := false
+				if u, err := url.Parse(g.URL); err == nil && u.Hostname() != "" {
+					loopback = auth.IsLoopbackHost(u.Host)
+				}
+				if loopback && g.Insecure {
+					_, _ = fmt.Fprintln(os.Stderr, "warning: --url is plain http; the credential sent to it travels unencrypted")
+				} else {
+					return errors.New("--url is plain http; the credential sent to it travels unencrypted — use https, or --insecure with a localhost/127.0.0.1 endpoint")
+				}
 			}
 			// Functional security note, not mode-gated decoration: --insecure
 			// disables TLS certificate verification for every HTTP path of

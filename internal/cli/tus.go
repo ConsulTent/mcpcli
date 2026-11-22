@@ -112,8 +112,12 @@ func basicBase(handler sdkauth.OAuthHandler) http.RoundTripper {
 }
 
 // tusWarnPlainHTTP emits the one-line plain-http warning for the resolved
-// endpoint. A warning only: the no-blocklist ruling keeps self-hosted and
-// loopback http endpoints working.
+// endpoint. Under the plain-http credential gate it covers ONLY the allowed
+// case — a literal loopback host with --insecure opted in; every other
+// plain-http endpoint with a credential is refused pre-wire by the tus
+// client's send() guard (the warning printing before that client error on
+// the forbidden path is the accepted double report). Names the concrete URL
+// so the actionable knob stays visible.
 func tusWarnPlainHTTP(w io.Writer, flag, rawURL string) {
 	if strings.HasPrefix(rawURL, "http://") {
 		_, _ = fmt.Fprintln(w, "warning: "+flag+" is plain http:// ("+rawURL+"); credentials sent to it travel unencrypted")

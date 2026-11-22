@@ -589,12 +589,14 @@ func TestTusPreFlightGoldens(t *testing.T) {
 
 // TestTusUploadBearerE2E pins the bearer path: the handler's token rides on
 // every request, and the literal-secret argv warning fires exactly once.
+// --insecure: the fake serves plain http on a loopback host, and the bearer
+// trips the tus plain-http credential gate without the loopback opt-in.
 func TestTusUploadBearerE2E(t *testing.T) {
 	fake := newCliTusFake(t)
 	file := writeTusTempFile(t, "report.pdf", 10, 'x')
 
 	readStderr := captureOSStderr(t)
-	_, _, _, err := runRoot(t, "--auth", "bearer", "--client-secret", tusDummyToken(),
+	_, _, _, err := runRoot(t, "--auth", "bearer", "--client-secret", tusDummyToken(), "--insecure",
 		"tus", "upload", file, "--api-url", fake.endpoint())
 	if err != nil {
 		t.Fatalf("bearer upload: %v", err)
@@ -634,7 +636,9 @@ func TestTusUploadBearerRefE2E(t *testing.T) {
 	fake := newCliTusFake(t)
 	file := writeTusTempFile(t, "report.pdf", 10, 'x')
 
-	_, stderr, _, err := runRoot(t, "--auth", "bearer", "--client-secret", "bws://"+uuidRef,
+	// One --insecure covers both plain-http surfaces of the run: the bws://
+	// expansion's identity exchange and the tus upload itself.
+	_, stderr, _, err := runRoot(t, "--auth", "bearer", "--client-secret", "bws://"+uuidRef, "--insecure",
 		"tus", "upload", file, "--api-url", fake.endpoint())
 	if err != nil {
 		t.Fatalf("bws:// bearer upload: %v\nstderr: %s", err, stderr)

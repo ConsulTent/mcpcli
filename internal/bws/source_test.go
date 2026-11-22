@@ -41,7 +41,9 @@ func TestSourceResolveThroughResolver(t *testing.T) {
 				t.Fatalf("SaveCredential: %v", err)
 			}
 
-			res, err := secret.New(NewSource(false))
+			// true: the fakes serve plain http on loopback hosts — the
+			// plain-http credential gate's one allowance.
+			res, err := secret.New(NewSource(true))
 			if err != nil {
 				t.Fatalf("secret.New: %v", err)
 			}
@@ -104,7 +106,10 @@ func TestSourceResolveExchange401(t *testing.T) {
 		t.Fatalf("SaveCredential: %v", err)
 	}
 
-	res, err := secret.New(NewSource(false))
+	// true: the identity fake serves plain http on a loopback host — the
+	// plain-http credential gate's one allowance (the 401 must be the
+	// runtime rejection, not the transport-policy refusal).
+	res, err := secret.New(NewSource(true))
 	if err != nil {
 		t.Fatalf("secret.New: %v", err)
 	}

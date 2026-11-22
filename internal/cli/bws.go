@@ -212,8 +212,12 @@ func newBWSLoginCommand(g *GlobalFlags, f *bwsFlags) *cobra.Command {
 }
 
 // bwsWarnPlainHTTP emits the one-line plain-http warning for a resolved
-// instance URL. A warning only: the no-blocklist ruling keeps self-hosted
-// and loopback http instances working.
+// instance URL. Under the plain-http credential gate it covers ONLY the
+// allowed case — a literal loopback host with --insecure opted in; every
+// other plain-http instance is refused pre-wire by the bws client's
+// Exchange/apiCall guards (the warning printing before that client error on
+// the forbidden path is the accepted double report). Names the concrete URL
+// so the actionable knob stays visible.
 func bwsWarnPlainHTTP(w io.Writer, flag, rawURL string) {
 	if strings.HasPrefix(rawURL, "http://") {
 		_, _ = fmt.Fprintln(w, "warning: "+flag+" is plain http:// ("+rawURL+"); the access token and secrets travel unencrypted")
